@@ -1,0 +1,217 @@
+Metadata-Version: 2.4
+Name: bluestar-committee
+Version: 3.0.4
+Summary: Comité de sélection Bluestar — croisement macro x technique, zéro-bruit.
+Author: Bluestar
+License: Proprietary
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: beautifulsoup4>=4.12
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Dynamic: license-file
+
+# Bluestar — Comité de sélection FX
+
+Système de décision croisant un briefing macro et un rapport desk technique
+(deux documents HTML en entrée) pour produire un rapport de sélection —
+sans score composite, sans capacité prédictive, sur une grille de décision
+gelée et testée.
+
+Ce document fait suite à un audit institutionnel multi-experts (10 rôles, 3
+audits indépendants comparés) et implémente la spécification de synthèse qui
+en résulte. Voir `CHANGELOG.md` pour le détail des choix issus de cet audit.
+
+## Installation
+
+```bash
+# Exécution seule (production) :
+pip install -e .
+
+# Développement / tests :
+pip install -e ".[dev]"
+```
+
+## Usage
+
+```bash
+bluestar-committee \
+  --macro chemin/vers/briefing_macro.html \
+  --desk chemin/vers/rapport_desk.html \
+  --out chemin/vers/rapport_sortie.html
+```
+
+Options :
+- `--verbose` : logging niveau DEBUG (par défaut : INFO).
+- `--allow-advisories` : retourne le code 0 même si au moins une décision porte
+  une advisory non bloquante. **Depuis v3.0.0, le défaut est bloquant (code 6)**
+  — ce flag restaure l'ancien comportement permissif, explicitement et en opt-in.
+- `--version` : affiche la version installée.
+
+### Codes de sortie
+
+| Code | Signification |
+|---|---|
+| 0 | Succès, aucune advisory (ou `--allow-advisories` avec advisories présentes) |
+| 1 | Échec d'extraction du document macro (structure inattendue) |
+| 2 | Échec d'extraction du document desk (document structurellement malformé) |
+| 3 | Échec de génération du rapport HTML |
+| 4 | Erreur d'entrée/sortie (fichier introuvable, permissions, ou fichier > 10 Mo) |
+| 5 | Erreur inattendue non catégorisée (filet de sécurité — cf. CHANGELOG 2.1.0) |
+| 6 | Au moins une advisory présente — **défaut depuis v3.0.0** (avant : nécessitait `--strict`) |
+| 7 | Extraction desk réussie mais aucun setup validé — résultat métier valide, distinct de 2 |
+
+Ces codes sont conçus pour être exploités par un ordonnanceur ou un pipeline
+CI/CD — jamais de code 0 en cas d'échec silencieux.
+
+## Exécuter les tests
+
+```bash
+pytest tests/ -v
+```
+
+65 tests, tous exécutés sur les deux documents source réels fournis en
+fixtures (`tests/data/`) — aucune donnée inventée, conformément à l'exigence
+zéro-hallucination de la spécification. Inclut `tests/test_cli.py`, ajouté
+lors du round de correctifs 2.1.0 pour verrouiller les codes de sortie.
+
+## Analyse statique (bandit / ruff / radon)
+
+```bash
+pip install bandit ruff radon
+ruff check src/
+bandit -c pyproject.toml -r src/
+radon cc src/ -s
+```
+
+**`-c pyproject.toml` est obligatoire pour bandit — ne jamais lancer
+`bandit -r .` sans ce flag.** Bandit ne découvre pas automatiquement
+`[tool.bandit]` dans `pyproject.toml`, quelle que soit sa présence dans le
+fichier. Un fichier `.bandit` autonome a été essayé en v3.0.1 mais son
+format (`clé = [...]`, syntaxe INI) s'est révélé non fiable selon les
+versions de bandit — trouvé lors d'un round d'audit ultérieur, corrigé en
+v3.0.2 en migrant vers `pyproject.toml` (TOML, syntaxe non ambiguë) *et* en
+imposant l'invocation explicite plutôt que de dépendre d'une auto-découverte
+qui ne fonctionne pas de façon fiable. Voir `CHANGELOG.md`.
+
+## Architecture
+
+```
+src/bluestar/
+  __init__.py           # version du package
+  errors.py              # hiérarchie d'exceptions typées
+  models.py               # schéma de données (dataclasses immuables)
+  extract/
+    macro_parser.py        # HTML macro -> MacroSnapshot (ancrage sémantique DOM)
+    desk_parser.py           # HTML desk -> DeskSnapshot
+  decide/
+    selection_grid.py         # echo(leg) gelé + decide() — fonctions pures, sans I/O
+  render/
+    html_report.py              # Decision -> HTML, aucune ligne écrite à la main
+  cli.py                          # point d'entrée, gestion d'erreurs, codes de sortie
+tests/
+  test_extract_macro.py
+  test_extract_desk.py
+  test_decide.py
+  test_render.py
+  test_cli.py               # codes de sortie, dont 5 et 6 (round 2.1.0)
+  data/
+    macro.html, desk.html          # documents source réels, utilisés par tous les tests
+```
+
+Principe directeur : **le HTML n'est jamais une source de vérité**. Il est
+input à parser (`extract/`) et output à générer (`render/`), jamais les deux
+en même temps. La logique de décision (`decide/`) ne connaît que des objets
+Python typés, jamais de HTML — elle est testable indépendamment de tout
+document réel.
+
+## Ce que produit le système
+
+Chaque setup validé par le desk reçoit un état parmi cinq :
+
+- **ELIGIBLE** — passe l'intégrité des données, l'éligibilité technique et
+  la convergence macro par jambe. Candidat à l'arbitrage portefeuille.
+- **WATCH** — convergence partielle (ex. une jambe en conflit de
+  positionnement).
+- **REJECT** — R:R insuffisant, ou instrument hors du régime FX pairé
+  actuellement supporté.
+- **BLOCKED_DATA** — contradiction directionnelle inter-sources détectée, ou
+  setup techniquement périmé (âge au-delà du plafond). Prime sur tout
+  scoring, quelle que soit la qualité technique apparente.
+- **BLOCKED_RISK** — réservé au futur moteur de portefeuille (non implémenté
+  dans cette version : aucune décision ne peut aujourd'hui atteindre cet état).
+
+**`ELIGIBLE` n'est pas `EXECUTER`.** Toute exécution réelle nécessite un
+moteur de portefeuille en aval (exposition nette, corrélation, plafond de
+positions), explicitement hors périmètre de cette version. Le rapport HTML
+généré le rappelle dans son pied de page.
+
+Chaque décision porte aussi des **advisories** : des signaux non bloquants,
+calculés automatiquement, qui n'ont jamais modifié un état. Voir la section
+Limitations ci-dessous pour le cas d'usage qui a motivé leur existence.
+
+## Limitations connues
+
+### GBP/AUD — divergence entre grille mécanique et jugement macro, visibilité résolue, méthodologie toujours ouverte
+
+Sur les données de test fournies, le setup `GBP/AUD` ressort `ELIGIBLE` : le
+prédicat `echo(leg)` lit l'IPS de GBP (3, capitulation) sur la jambe longue
+comme une confluence mécanique (mean-reversion).
+
+Une analyse manuelle menée lors de l'audit avait conclu à un rejet, au motif
+que le briefing macro porte une thèse baissière **explicite** sur GBP ailleurs
+dans son univers (`GBP/USD SHORT` ★★★★, `GBP/JPY SHORT` ★★), et que la
+lecture mécanique de l'IPS contredit cette thèse au niveau de la devise — pas
+seulement au niveau de la paire exacte.
+
+Le système détecte ce cas **automatiquement** via `currency_level_advisories()`
+(deux advisories générées pour ce setup, une par paire prioritaire macro
+concernée). **Depuis la version 3.0.0**, ces advisories produisent le code de
+sortie 6 par défaut (`--allow-advisories` pour revenir à l'ancien
+comportement) — un opérateur ou un ordonnanceur ne peut donc plus manquer ce
+signal silencieusement. **Cela résout le problème de visibilité, pas la
+question méthodologique** : la grille de décision elle-même n'a pas été
+modifiée, GBP/AUD ressort toujours `ELIGIBLE` mécaniquement. Escalader ce cas
+en `REJECT`/`WATCH` automatique demanderait de faire évoluer la logique de
+`echo(leg)` elle-même (contrôle au niveau devise, pas seulement paire exacte)
+— décision de méthodologie distincte, non prise à ce stade. Voir
+`tests/test_decide.py::test_gbp_aud_KNOWN_DIVERGENCE_mechanical_state_is_eligible`
+pour le verrouillage du comportement mécanique actuel.
+
+### Hors périmètre de cette version
+
+- **Mode « jambe unique »** pour indices actions et matières premières —
+  ces instruments sont explicitement `REJECT` (jamais scorés au forceps avec
+  une règle conçue pour deux devises FX).
+- **Moteur de portefeuille** — exposition nette par devise-facteur,
+  corrélation entre positions retenues, plafond de positions simultanées.
+- **Journalisation immuable et snapshotting point-in-time** — prérequis avant
+  toute validation statistique future (backtest), pour éviter tout look-ahead
+  bias sur des données CFTC révisées après coup.
+- **Décote de fraîcheur de l'IPS** — l'âge de la donnée IPS/COT est extrait
+  mais non encore pondéré dans la décision.
+
+## Registre des seuils gelés
+
+Les seuils IPS (`IPS_CAPITULATION_MAX`, `IPS_CROWDED_MIN`) vivent **exclusivement**
+dans `src/bluestar/models.py` (`ips_zone()`) — c'est le seul endroit où la logique
+de zonage s'exécute. Jusqu'à la version 2.1.0, une copie de ces mêmes noms existait
+aussi dans `decide/selection_grid.py`, présentée comme un "registre gelé" mais
+jamais lue par le code réel : modifier cette copie n'avait aucun effet sur les
+décisions. Défaut trouvé par un audit externe (GPT-5.5), confirmé par exécution,
+corrigé en 2.1.0 — voir `CHANGELOG.md` pour le détail complet.
+
+Les seuils `MAX_TECH_AGE_DAYS` (45 jours) et `MIN_RISK_REWARD` (1.5), dans
+`decide/selection_grid.py`, sont réellement utilisés par la décision mais **ne
+sont pas calibrés empiriquement** — ce sont des valeurs choisies par l'auteur du
+système, explicitement documentées comme telles dans le code depuis la version
+2.1.0 (relevé convergent des trois audits du round de revue de code). Ne pas les
+traiter comme des vérités empiriques tant qu'ils ne portent pas une source, une
+date de calibration et un propriétaire identifiés.
+
+`GRID_VERSION` (actuellement `bluestar-decide-v2.1`) est tracée dans chaque
+`Decision` produite. Modifier un seuil réellement utilisé par la décision signifie
+modifier le fichier source et incrémenter cette version — jamais une interprétation
+implicite au moment de la décision.

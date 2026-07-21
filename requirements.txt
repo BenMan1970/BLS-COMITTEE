@@ -1,0 +1,7 @@
+# Installe le package bluestar lui-même (src/bluestar/, via pyproject.toml)
+# en mode editable — nécessaire car streamlit_app.py fait
+# `from bluestar... import ...`. Sans cette ligne, Streamlit Community Cloud
+# n'installerait que les dépendances listées ci-dessous, pas le package.
+-e .
+
+streamlit>=1.35
