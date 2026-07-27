@@ -45,7 +45,11 @@ def test_row_count_matches_decisions(rendered):
 def test_all_badges_map_to_valid_states(rendered):
     html, *_ = rendered
     soup = BeautifulSoup(html, "html.parser")
-    badges = {b.get_text(strip=True) for b in soup.find_all(class_="badge")}
+    badges = {
+        b.get_text(strip=True)
+        for b in soup.find_all(class_="badge")
+        if "badge-asset" not in b.get("class", [])
+    }
     valid_states = {s.value for s in DecisionState}
     assert badges.issubset(valid_states)
     assert badges  # au moins un badge présent
