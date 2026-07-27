@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from bluestar.models import (
+    DeskRejectedSetup,
     DeskSetup,
     DeskSnapshot,
     Direction,
@@ -58,7 +59,8 @@ MAX_IPS_AGE_DAYS_WARN = 5       # RÉSERVÉ, NON CÂBLÉ — déclaré mais aucu
                                  # encore (décote de fraîcheur IPS = roadmap, pas implémentée).
                                  # Volontairement non utilisé plutôt que silencieusement ignoré :
                                  # tout futur retrait ou activation doit passer par ce commentaire.
-GRID_VERSION = "bluestar-decide-v2.1"  # incrémenté : correction seuils dupliqués (19/07/2026)
+GRID_VERSION = "bluestar-decide-v2.2"  # incremente : invariant 33/33 (rejets desk routes +
+                                        # mode jambe unique indices/metaux) - round audit 27/07/2026
 
 
 class LegVerdict(str, Enum):
@@ -76,6 +78,81 @@ class DecisionState(str, Enum):
     BLOCKED_RISK = "BLOCKED_RISK"  # non calculé ici : nécessite le moteur de portefeuille (hors périmètre de decide())
 
 
+class AssetClass(str, Enum):
+    """Classe d'actif, indépendante de la grille macro×IPS (qui ne
+    s'applique qu'aux paires FX à deux devises). Ajoutée pour fermer
+    l'invariant §1.1 ('33/33, jamais 3/33') : avant cette extension, tout
+    instrument dont le symbole ne se décomposait pas en deux codes ISO-like
+    de 3 lettres (indices actions, ex. SPX500/USD, US30/USD, NAS100/USD,
+    DE30/EUR) était REJECT par construction, avec le même message générique
+    — ce n'est pas un rejet motivé, c'est une catégorie non gérée."""
+    FX_PAIR = "FX_PAIR"
+    EQUITY_INDEX = "EQUITY_INDEX"
+    METAL = "METAL"
+    OTHER = "OTHER"
+
+
+# Codes alpha-3 de métaux précieux : passent le même test syntaxique qu'une
+# devise FX (3 lettres) mais n'en sont pas une — XAU/USD reste une paire à
+# deux "devises" valides pour leg_currencies() (comportement existant,
+# documenté, non modifié), mais on la classe correctement ici pour
+# l'affichage et pour le mode jambe unique des futurs instruments similaires
+# qui ne passeraient pas ce test (ex. un symbole sans second code à 3 lettres).
+_METAL_CODES = frozenset({"XAU", "XAG", "XPT", "XPD"})
+
+# Bases d'indices actions connues du corpus réel (round d'audit 27/07/2026).
+# Liste non exhaustive : le test principal de classification reste "la base
+# contient un chiffre" (SPX500, US30, NAS100, DE30...), ce qui couvre les
+# nouveaux indices sans mise à jour de cette liste. Conservée pour les rares
+# bases sans chiffre (ex. futurs "UK100", "DAX" selon la convention du desk).
+_KNOWN_INDEX_BASES = frozenset({"SPX500", "US30", "NAS100", "DE30", "UK100", "JPN225"})
+
+
+def classify_asset(pair: str) -> AssetClass:
+    """Classe un symbole d'actif à partir de son code seul (pas de la
+    direction). Ancrage : §3.5/§3.6 du cahier d'extension du comité — les
+    indices actions du corpus réel ont un symbole dont la base contient un
+    chiffre ; les métaux ont un code alpha-3 reconnu qui passe le même test
+    syntaxique qu'une devise FX sans en être une."""
+    if "/" not in pair:
+        return AssetClass.OTHER
+    base, _, quote = pair.partition("/")
+    if base in _METAL_CODES:
+        return AssetClass.METAL
+    if any(ch.isdigit() for ch in base) or base in _KNOWN_INDEX_BASES:
+        return AssetClass.EQUITY_INDEX
+    if len(base) == 3 and base.isalpha() and len(quote) == 3 and quote.isalpha():
+        return AssetClass.FX_PAIR
+    return AssetClass.OTHER
+
+
+def regime_bias(asset_class: AssetClass, regime: str) -> Direction | None:
+    """Biais directionnel implicite du régime macro pour un actif non-FX en
+    mode jambe unique (§4 du cahier d'extension). Lecture délibérément
+    grossière, par mots-clés Risk-On/Risk-Off dans le libellé de régime : un
+    régime ambigu (ex. 'Mixed / Selective', corpus réel du 27/07/2026) ne
+    produit AUCUN biais (None) plutôt qu'un biais forcé — cf. invariant
+    'jamais de forcing' (§4)."""
+    regime_lc = (regime or "").lower()
+    is_risk_on = "risk-on" in regime_lc or "risk on" in regime_lc
+    is_risk_off = "risk-off" in regime_lc or "risk off" in regime_lc
+    if asset_class == AssetClass.EQUITY_INDEX:
+        if is_risk_on:
+            return Direction.LONG
+        if is_risk_off:
+            return Direction.SHORT
+        return None
+    if asset_class == AssetClass.METAL:
+        # Métal = valeur refuge : Risk-Off pousse vers le long, Risk-On vers
+        # le short — symétrique de l'indice actions.
+        if is_risk_off:
+            return Direction.LONG
+        if is_risk_on:
+            return Direction.SHORT
+        return None
+    return None
+
+
 @dataclass(frozen=True)
 class LegEcho:
     currency: str
@@ -86,12 +163,14 @@ class LegEcho:
 @dataclass(frozen=True)
 class Decision:
     pair: str
-    direction: Direction
+    direction: Direction | None
     state: DecisionState
     legs: tuple[LegEcho, ...]
-    limiting_factor: str            # jamais "score insuffisant" — cause nommée
-    advisories: tuple[str, ...] = ()  # signaux non bloquants, jamais utilisés pour changer `state`
+    limiting_factor: str
+    advisories: tuple[str, ...] = ()
     grid_version: str = GRID_VERSION
+    asset_class: AssetClass = AssetClass.FX_PAIR
+    source_reject_code: str | None = None
 
 
 def _implied_macro_currency_bias(macro: MacroSnapshot) -> dict[str, list[tuple[Direction, str, int]]]:
@@ -222,12 +301,42 @@ def decide_setup(setup: DeskSetup, macro: MacroSnapshot) -> Decision:
     # --- Niveau 2 : régime d'instrument (pairé vs jambe unique) -------------
     legs = setup.leg_currencies()
     if legs is None:
+        asset_class = classify_asset(setup.pair)
+
+        if asset_class in (AssetClass.EQUITY_INDEX, AssetClass.METAL):
+            bias = regime_bias(asset_class, macro.regime)
+            if bias is None:
+                return Decision(
+                    pair=setup.pair, direction=setup.direction, state=DecisionState.WATCH,
+                    legs=(), asset_class=asset_class, limiting_factor=(
+                        f"mode jambe unique ({asset_class.value}) : regime macro "
+                        f"{macro.regime!r} non directionnel"
+                    ),
+                    advisories=advisories,
+                )
+            if setup.direction == bias:
+                return Decision(
+                    pair=setup.pair, direction=setup.direction, state=DecisionState.ELIGIBLE,
+                    legs=(), asset_class=asset_class, limiting_factor="—",
+                    advisories=advisories + (
+                        f"mode jambe unique : confluence avec le biais de regime "
+                        f"{bias.value.upper()} ({asset_class.value}, regime {macro.regime!r})",
+                    ),
+                )
+            return Decision(
+                pair=setup.pair, direction=setup.direction, state=DecisionState.WATCH,
+                legs=(), asset_class=asset_class, limiting_factor=(
+                    f"mode jambe unique : conflit avec le biais de regime "
+                    f"{bias.value.upper()} ({asset_class.value}, regime {macro.regime!r})"
+                ),
+                advisories=advisories,
+            )
+
         return Decision(
             pair=setup.pair, direction=setup.direction, state=DecisionState.REJECT,
-            legs=(), limiting_factor=(
-                "instrument non pairé (pas deux devises FX) — mode jambe unique "
-                "non implémenté dans cette version, exclu explicitement plutôt que "
-                "scoré au forceps avec une règle FX inadaptée"
+            legs=(), asset_class=asset_class, limiting_factor=(
+                "instrument non paire et non classifiable (ni FX, ni indice actions, "
+                "ni metal reconnu)"
             ),
             advisories=advisories,
         )
@@ -274,10 +383,68 @@ def decide_setup(setup: DeskSetup, macro: MacroSnapshot) -> Decision:
     )
 
 
-def decide_all(desk: DeskSnapshot, macro: MacroSnapshot) -> tuple[Decision, ...]:
-    """Applique decide_setup à tous les setups validés du desk."""
-    decisions = tuple(decide_setup(s, macro) for s in desk.setups)
-    counts = Counter(d.state.value for d in decisions)
-    logger.info("decisions_computed grid_version=%s total=%d states=%s",
-                GRID_VERSION, len(decisions), dict(counts))
-    return decisions
+_REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
+    "LOW_QUALITY": (DecisionState.REJECT, "quality"),
+    "LOW_CONVICTION": (DecisionState.REJECT, "conviction"),
+    "RR_OUT_OF_RANGE": (DecisionState.REJECT, "risk_reward"),
+    "PRICE_PAST_TP": (DecisionState.BLOCKED_DATA, "price"),
+    "CLUSTER_DUP": (DecisionState.WATCH, "cluster"),
+}
+
+
+def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decision:
+    """Route un rejet desk vers une Decision.
+
+    Ces actifs ont deja ete ecartes par le desk technique pour une raison
+    purement technique (qualite, conviction, R:R, prix, doublon de
+    cluster) et n'ont jamais traverse la grille macro x IPS echo(leg), qui
+    ne s'applique qu'aux setups valides. decide_rejection() ne reevalue
+    donc pas ces setups au niveau macro ; il trace une decision motivee
+    pour chacun, ce qui ferme l'invariant 33/33 sans pretendre a une
+    re-analyse qu'aucune donnee ne permettrait de justifier."""
+    asset_class = classify_asset(rejected.pair)
+    state, _leg_key = _REJECT_CODE_ROUTES.get(
+        rejected.reject_code, (DecisionState.REJECT, "reject_code_inconnu")
+    )
+    if rejected.reject_code not in _REJECT_CODE_ROUTES:
+        logger.warning("unknown_reject_code pair=%s code=%s", rejected.pair, rejected.reject_code)
+
+    limiting_factor = f"rejet desk [{rejected.reject_code}] : {rejected.detail}"
+
+    advisories: tuple[str, ...] = ()
+    if rejected.reject_code == "CLUSTER_DUP":
+        advisories = (
+            "cluster deja represente par un setup valide du desk — ce "
+            "doublon n'est pas promu automatiquement en ELIGIBLE.",
+        )
+
+    return Decision(
+        pair=rejected.pair,
+        direction=rejected.direction,
+        state=state,
+        legs=(),
+        limiting_factor=limiting_factor,
+        advisories=advisories,
+        asset_class=asset_class,
+        source_reject_code=rejected.reject_code,
+    )
+
+
+def decide_all(
+    desk: DeskSnapshot, macro: MacroSnapshot, *, include_rejects: bool = True
+) -> tuple[Decision, ...]:
+    """Applique decide_setup a tous les setups valides du desk et, par
+    defaut, decide_rejection a tous les rejets desk — invariant souverain
+    (len(desk.setups) + len(desk.rejected) == desk.universe_total decisions).
+
+    include_rejects=False restaure l'ancien comportement (setups valides
+    seuls) pour compatibilite explicite, opt-in — jamais le defaut
+    silencieux."""
+    decisions = [decide_setup(s, macro) for s in desk.setups]
+    if include_rejects:
+        decisions.extend(decide_rejection(r, macro) for r in desk.rejected)
+    decisions_t = tuple(decisions)
+    counts = Counter(d.state.value for d in decisions_t)
+    logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s",
+                GRID_VERSION, len(decisions_t), dict(counts), include_rejects)
+    return decisions_t
