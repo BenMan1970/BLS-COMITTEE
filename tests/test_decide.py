@@ -11,6 +11,10 @@ from bluestar.extract.macro_parser import parse_macro
 from bluestar.extract.desk_parser import parse_desk
 from bluestar.decide.selection_grid import (
     decide_all,
+    decide_rejection,
+    classify_asset,
+    regime_bias,
+    AssetClass,
     DecisionState,
     echo_leg,
     LegVerdict,
@@ -121,12 +125,84 @@ def test_currency_level_advisories_is_pure(desk, macro):
 
 def test_grid_version_is_pinned(decisions):
     for d in decisions.values():
-        assert d.grid_version == "bluestar-decide-v2.1"
+        assert d.grid_version == "bluestar-decide-v2.2"
 
 
-def test_decide_all_count_matches_desk_setups(desk, macro):
+# --- Regression : invariant 33/33 (round d'audit du 27/07/2026) ------------
+
+def test_decide_all_default_covers_full_universe(desk, macro):
     decisions_tuple = decide_all(desk, macro)
+    assert len(decisions_tuple) == len(desk.setups) + len(desk.rejected)
+    assert len(decisions_tuple) == desk.universe_total
+
+
+def test_decide_all_include_rejects_false_restores_old_behaviour(desk, macro):
+    decisions_tuple = decide_all(desk, macro, include_rejects=False)
     assert len(decisions_tuple) == len(desk.setups)
+
+
+def test_no_reject_code_left_without_a_route(desk, macro):
+    for rejected in desk.rejected:
+        d = decide_rejection(rejected, macro)
+        assert d.state in (
+            DecisionState.REJECT, DecisionState.BLOCKED_DATA, DecisionState.WATCH,
+        )
+        assert d.limiting_factor
+        assert d.source_reject_code == rejected.reject_code
+
+
+def test_cluster_dup_reject_routes_to_watch(desk, macro):
+    dup = next(r for r in desk.rejected if r.reject_code == "CLUSTER_DUP")
+    d = decide_rejection(dup, macro)
+    assert d.state == DecisionState.WATCH
+    assert d.advisories
+
+
+def test_low_quality_reject_routes_to_reject(desk, macro):
+    lq = next(r for r in desk.rejected if r.reject_code == "LOW_QUALITY")
+    d = decide_rejection(lq, macro)
+    assert d.state == DecisionState.REJECT
+
+
+def test_price_past_tp_reject_routes_to_blocked_data(desk, macro):
+    ppt = next((r for r in desk.rejected if r.reject_code == "PRICE_PAST_TP"), None)
+    if ppt is None:
+        pytest.skip("Aucun PRICE_PAST_TP dans cette fixture desk.")
+    d = decide_rejection(ppt, macro)
+    assert d.state == DecisionState.BLOCKED_DATA
+
+
+# --- Regression : classification d'actif et mode jambe unique (par. 3.5/4) --
+
+def test_classify_asset_equity_index_by_digit_in_base():
+    assert classify_asset("SPX500/USD") == AssetClass.EQUITY_INDEX
+    assert classify_asset("US30/USD") == AssetClass.EQUITY_INDEX
+    assert classify_asset("DE30/EUR") == AssetClass.EQUITY_INDEX
+
+
+def test_classify_asset_metal():
+    assert classify_asset("XAU/USD") == AssetClass.METAL
+
+
+def test_classify_asset_fx_pair_unaffected():
+    assert classify_asset("EUR/USD") == AssetClass.FX_PAIR
+
+
+def test_regime_bias_ambiguous_regime_returns_none():
+    assert regime_bias(AssetClass.EQUITY_INDEX, "Mixed / Selective") is None
+    assert regime_bias(AssetClass.METAL, "Mixed / Selective") is None
+
+
+def test_regime_bias_risk_on_and_risk_off_are_opposite_for_equity_index():
+    from bluestar.models import Direction
+    assert regime_bias(AssetClass.EQUITY_INDEX, "Risk-On") == Direction.LONG
+    assert regime_bias(AssetClass.EQUITY_INDEX, "Risk-Off") == Direction.SHORT
+
+
+def test_regime_bias_metal_is_safe_haven_symmetric():
+    from bluestar.models import Direction
+    assert regime_bias(AssetClass.METAL, "Risk-Off") == Direction.LONG
+    assert regime_bias(AssetClass.METAL, "Risk-On") == Direction.SHORT
 
 
 # --- Régression : seuils IPS dupliqués (round d'audit du 19/07/2026) -------
