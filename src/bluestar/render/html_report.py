@@ -18,7 +18,7 @@ import html as html_lib
 import logging
 from datetime import datetime, timezone
 
-from bluestar.decide.selection_grid import Decision, DecisionState, LegVerdict
+from bluestar.decide.selection_grid import AssetClass, Decision, DecisionState, LegVerdict
 from bluestar.errors import RenderError
 from bluestar.models import DeskSnapshot, MacroSnapshot
 
@@ -59,6 +59,13 @@ def _esc(text: str) -> str:
     return html_lib.escape(str(text), quote=True)
 
 
+_ASSET_BADGE_LABEL = {
+    AssetClass.EQUITY_INDEX: "INDICE - JAMBE UNIQUE",
+    AssetClass.METAL: "METAL",
+    AssetClass.OTHER: "NON CLASSIFIE",
+}
+
+
 def _render_row(d: Decision) -> str:
     badge_class = _STATE_BADGE_CLASS[d.state]
     legs_html = ""
@@ -78,16 +85,28 @@ def _render_row(d: Decision) -> str:
         items = "".join(f"<li>{_esc(a)}</li>" for a in d.advisories)
         advisories_html = f'<ul class="advisory-list">{items}</ul>'
 
-    dir_class = "dir-long" if d.direction.value == "long" else "dir-short"
-    dir_arrow = "▲ LONG" if d.direction.value == "long" else "▼ SHORT"
+    if d.direction is None:
+        dir_class, dir_arrow = "dir-neutral", "◆ N/A"
+    elif d.direction.value == "long":
+        dir_class, dir_arrow = "dir-long", "▲ LONG"
+    else:
+        dir_class, dir_arrow = "dir-short", "▼ SHORT"
+
+    asset_badge_html = ""
+    if d.asset_class != AssetClass.FX_PAIR:
+        label = _ASSET_BADGE_LABEL.get(d.asset_class, d.asset_class.value)
+        asset_badge_html = f'<br><span class="badge badge-asset">{_esc(label)}</span>'
+
+    source_code_html = _esc(d.source_reject_code) if d.source_reject_code else '<span class="muted">—</span>'
 
     return f"""
       <tr>
-        <td><span class="pair">{_esc(d.pair)}</span><br><span class="{dir_class}">{dir_arrow}</span></td>
+        <td><span class="pair">{_esc(d.pair)}</span><br><span class="{dir_class}">{dir_arrow}</span>{asset_badge_html}</td>
         <td>{legs_html}</td>
         <td class="detail">{advisories_html if advisories_html else '<span class="muted">aucun</span>'}</td>
         <td><span class="badge {badge_class}">{_esc(d.state.value)}</span></td>
         <td class="factor">{_esc(d.limiting_factor)}</td>
+        <td class="detail">{source_code_html}</td>
       </tr>"""
 
 
@@ -127,7 +146,7 @@ body{margin:0;background:var(--bg);font-family:var(--font-sans);color:var(--roya
 .meta-dates{font-family:var(--font-mono);font-size:10px;color:var(--slate);
   background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;line-height:1.8}
 .meta-dates b{color:var(--royal-dark)}
-.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
 .kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 16px}
 .kpi .lbl{font-family:var(--font-mono);font-size:9px;text-transform:uppercase;color:var(--slate);letter-spacing:.6px}
 .kpi .val{font-family:var(--font-mono);font-size:21px;font-weight:700;color:var(--royal);margin-top:5px}
@@ -146,8 +165,10 @@ tr:nth-child(even) td{background:#FAFBFF}
 .pair{font-family:var(--font-mono);font-weight:700;font-size:14px}
 .dir-long{color:var(--green);font-size:10px;font-family:var(--font-mono)}
 .dir-short{color:var(--red);font-size:10px;font-family:var(--font-mono)}
+.dir-neutral{color:var(--slate);font-size:10px;font-family:var(--font-mono)}
 .badge{font-family:var(--font-mono);font-size:9px;padding:3px 8px;border-radius:5px;
        display:inline-block;font-weight:700;letter-spacing:.3px}
+.badge-asset{background:#EEF1FA;color:var(--slate);margin-top:3px}
 .b-eligible{background:var(--green-soft);color:var(--green)}
 .b-watch{background:var(--amber-soft);color:var(--amber)}
 .b-reject{background:var(--red-soft);color:var(--red)}
@@ -171,6 +192,7 @@ tr:nth-child(even) td{background:#FAFBFF}
   table,.kpi{box-shadow:none}
 }
 @media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:1040px) and (min-width:761px){.kpis{grid-template-columns:repeat(3,1fr)}}
 """
 
 
@@ -240,21 +262,23 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     Régime macro : <b>{_esc(macro.regime)}</b> (confiance {_esc(macro.regime_confidence_pct)}%) ·
     Univers desk : <b>{desk.universe_evaluated}/{desk.universe_total}</b>,
     {len(desk.setups)} setups validés, {len(desk.rejected)} rejetés ·
+    Décisions comité : <b>{len(ordered)}/{desk.universe_total}</b> ·
     Grille de décision : <b>{_esc(grid_version)}</b>
   </div>
 
   <div class="kpis">
-    <div class="kpi royal"><div class="lbl">Setups évalués</div><div class="val">{len(ordered)}</div><div class="hint">desk validés</div></div>
+    <div class="kpi royal"><div class="lbl">Univers traité</div><div class="val">{len(ordered)}</div><div class="hint">sur {desk.universe_total} actifs desk</div></div>
     <div class="kpi top"><div class="lbl">ELIGIBLE</div><div class="val">{counts[DecisionState.ELIGIBLE]}</div><div class="hint">{_esc(eligible_pairs)}</div></div>
     <div class="kpi mid"><div class="lbl">WATCH</div><div class="val">{counts[DecisionState.WATCH]}</div><div class="hint">{_esc(watch_pairs)}</div></div>
     <div class="kpi low"><div class="lbl">BLOCKED</div><div class="val">{counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK]}</div><div class="hint">{_esc(blocked_pairs)}</div></div>
+    <div class="kpi low"><div class="lbl">REJECT</div><div class="val">{counts[DecisionState.REJECT]}</div><div class="hint">rejets desk + jambe unique</div></div>
     <div class="kpi royal"><div class="lbl">Advisories</div><div class="val">{total_advisories}</div><div class="hint">signaux non bloquants</div></div>
   </div>
 
   <table>
     <thead><tr>
       <th>Setup</th><th>Verdict par jambe</th><th>Advisories (non bloquants)</th>
-      <th>Décision</th><th>Facteur limitant réel</th>
+      <th>Décision</th><th>Facteur limitant réel</th><th>Code rejet desk</th>
     </tr></thead>
     <tbody>{rows_html}
     </tbody>
