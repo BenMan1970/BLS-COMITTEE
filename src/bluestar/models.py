@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import types
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -155,6 +155,22 @@ class DeskRejectedSetup:
 
 
 @dataclass(frozen=True)
+class CorrelationSignal:
+    """Un signal technique (CHoCH etc.) associé à une devise, tel que
+    calculé en amont par le moteur (merged_pipeline.json::correlation_groups)
+    et transporté jusqu'au HTML desk depuis le round du 27/07/2026.
+    Purement informatif — jamais utilisé pour changer un état de décision,
+    même contrat que les autres advisories."""
+    symbol: str
+    direction: Direction | None
+    kind: str
+    timeframe: str
+    mtf_pct: float | None
+    quality: str
+    confluence: float | None
+
+
+@dataclass(frozen=True)
 class DeskSnapshot:
     """État complet du rapport desk à un instant donné (point-in-time)."""
     report_datetime: str
@@ -165,3 +181,12 @@ class DeskSnapshot:
     themes: tuple[str, ...]
     setups: tuple[DeskSetup, ...]
     rejected: tuple[DeskRejectedSetup, ...]
+    # PATCH-CORRGROUPS (round du 28/07/2026) : dict devise -> signaux
+    # techniques réels (pas une thèse macro déduite). Vide par défaut pour
+    # tout document desk antérieur au correctif moteur qui l'embarque.
+    correlation_groups: dict[str, tuple[CorrelationSignal, ...]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "correlation_groups", types.MappingProxyType(dict(self.correlation_groups))
+        )
