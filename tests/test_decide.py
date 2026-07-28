@@ -5,13 +5,17 @@ Exécutés sur les DEUX documents réels (tests/data/macro.html, tests/data/desk
 jamais sur des fixtures inventées.
 """
 
+import pathlib
+
 import pytest
 
 from bluestar.extract.macro_parser import parse_macro
 from bluestar.extract.desk_parser import parse_desk
+from bluestar.models import DeskRejectedSetup, DeskSetup, Direction
 from bluestar.decide.selection_grid import (
     decide_all,
     decide_rejection,
+    decide_setup,
     classify_asset,
     regime_bias,
     AssetClass,
@@ -172,6 +176,45 @@ def test_price_past_tp_reject_routes_to_blocked_data(desk, macro):
     assert d.state == DecisionState.BLOCKED_DATA
 
 
+# --- Regression : codes de rejet ajoutés après lecture de ENGINE.V9.py ------
+# (round d'audit du 27/07/2026 — ces codes existent réellement dans le moteur
+# mais n'apparaissaient pas dans la fixture desk du jour ; construits
+# synthétiquement pour ne pas dépendre d'un scénario calendaire particulier.)
+
+@pytest.mark.parametrize(
+    "reject_code,expected_state",
+    [
+        ("CAL_BLACKOUT", DecisionState.BLOCKED_DATA),
+        ("SCHEMA_ASSET_ERROR", DecisionState.BLOCKED_DATA),
+        ("NO_ATR", DecisionState.BLOCKED_DATA),
+        ("SL_SIGN", DecisionState.BLOCKED_DATA),
+        ("NO_DIRECTION", DecisionState.REJECT),
+        ("LOW_CONSENSUS", DecisionState.REJECT),
+    ],
+)
+def test_engine_reject_codes_are_routed(macro, reject_code, expected_state):
+    synthetic = DeskRejectedSetup(
+        pair="EUR/USD", direction=None, reject_code=reject_code,
+        detail=f"synthetic test row for {reject_code}",
+    )
+    d = decide_rejection(synthetic, macro)
+    assert d.state == expected_state
+    assert d.source_reject_code == reject_code
+
+
+def test_no_engine_reject_code_falls_back_to_unknown(macro):
+    """Garde-fou inverse : un code réellement inconnu doit toujours tomber
+    dans le repli explicite, jamais planter ni être absorbé silencieusement
+    dans une des routes ci-dessus."""
+    synthetic = DeskRejectedSetup(
+        pair="EUR/USD", direction=None, reject_code="UN_CODE_QUI_NEXISTE_PAS",
+        detail="test",
+    )
+    d = decide_rejection(synthetic, macro)
+    assert d.state == DecisionState.REJECT
+    assert d.source_reject_code == "UN_CODE_QUI_NEXISTE_PAS"
+
+
 # --- Regression : classification d'actif et mode jambe unique (par. 3.5/4) --
 
 def test_classify_asset_equity_index_by_digit_in_base():
@@ -299,3 +342,85 @@ def test_conflit_leg_short_circuits_before_risk_reward_check(desk, macro):
         assert "R:R" not in decisions["EUR/JPY"].limiting_factor
     finally:
         grid_module.MIN_RISK_REWARD = original
+
+
+# --- Regression : advisories techniques via correlation_groups (28/07/2026) -
+# (correlation_groups existe dans le JSON merge depuis toujours, mais n'était
+# ingéré ni par le moteur ni par le comité avant ce round — cf. audit.)
+
+def _synthetic_setup(pair: str, direction: Direction) -> DeskSetup:
+    return DeskSetup(
+        pair=pair, direction=direction, conviction_grade="BBB", conviction_value=0.5,
+        cluster_tag="", quality="A", mtf_pct=60.0, age_days=1, risk_reward=2.0,
+        factors={}, entry=1.0, stop_loss=0.9,
+    )
+
+
+def test_technical_currency_advisories_empty_without_correlation_groups():
+    from bluestar.decide.selection_grid import technical_currency_advisories
+    setup = _synthetic_setup("EUR/USD", Direction.LONG)
+    assert technical_currency_advisories(setup, {}) == ()
+
+
+def test_technical_currency_advisories_flags_contradicting_signal():
+    from bluestar.decide.selection_grid import technical_currency_advisories
+    from bluestar.models import CorrelationSignal
+
+    setup = _synthetic_setup("EUR/USD", Direction.LONG)  # jambe USD = SHORT
+    corr = {
+        "USD": (
+            CorrelationSignal(
+                symbol="XAU/USD", direction=Direction.SHORT, kind="CHoCH",
+                timeframe="H1", mtf_pct=51, quality="B+", confluence=110.5,
+            ),
+        ),
+    }
+    advisories = technical_currency_advisories(setup, corr)
+    assert len(advisories) == 1
+    assert "XAU/USD" in advisories[0]
+    assert "USD" in advisories[0]
+
+
+def test_technical_currency_advisories_ignores_same_pair_and_neutral():
+    from bluestar.decide.selection_grid import technical_currency_advisories
+    from bluestar.models import CorrelationSignal
+
+    setup = _synthetic_setup("GBP/USD", Direction.SHORT)
+    corr = {
+        "GBP": (
+            # même paire que le setup -> ne doit jamais se citer elle-même
+            CorrelationSignal(symbol="GBP/USD", direction=Direction.SHORT, kind="CHoCH",
+                               timeframe="H1", mtf_pct=63, quality="A", confluence=105.81),
+            # direction=None (Neutral côté moteur) -> pas de contradiction à signaler
+            CorrelationSignal(symbol="GBP/JPY", direction=None, kind="CHoCH",
+                               timeframe="H1", mtf_pct=40, quality="B", confluence=50.0),
+        ),
+    }
+    assert technical_currency_advisories(setup, corr) == ()
+
+
+def test_decide_setup_backward_compatible_without_correlation_groups(macro):
+    """decide_setup() doit rester appelable exactement comme avant ce round
+    (2 arguments), correlation_groups étant strictement optionnel."""
+    setup = _synthetic_setup("EUR/USD", Direction.LONG)
+    decide_setup(setup, macro)  # ne doit pas lever
+
+
+def test_decide_all_end_to_end_with_correlation_groups(macro):
+    """Bout-en-bout sur un vrai document produit par le moteur patché du
+    27/07/2026 (avec le bloc <script id="correlation-groups">) : l'invariant
+    33/33 tient et au moins une advisory technique apparaît (GBP/USD est
+    censé recevoir la confirmation USD baissier via XAU/USD et NAS100/USD)."""
+    real_html = pathlib.Path("/home/claude/fixed_report_v3.html")
+    if not real_html.exists():
+        pytest.skip("Rapport moteur patché non disponible dans cet environnement de test.")
+    desk_with_corr = parse_desk(real_html.read_text(encoding="utf-8"))
+    decisions = decide_all(desk_with_corr, macro)
+    assert len(decisions) == desk_with_corr.universe_total
+    gbpnzd = next(d for d in decisions if d.pair == "GBP/NZD")
+    assert any("corrélation technique réelle" in a for a in gbpnzd.advisories), (
+        "GBP/NZD (long GBP) doit recevoir la contradiction technique : GBP est "
+        "confirmé SHORT par CHoCH sur GBP/USD et GBP/CAD, deux paires distinctes "
+        "de GBP/NZD lui-même."
+    )
+
