@@ -19,7 +19,9 @@ fichier, jamais une interprétation au moment de la décision.
 from __future__ import annotations
 
 import logging
+import types
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -222,6 +224,48 @@ def currency_level_advisories(setup: DeskSetup, macro: MacroSnapshot) -> tuple[s
     return tuple(advisories)
 
 
+def technical_currency_advisories(
+    setup: DeskSetup, correlation_groups: Mapping[str, tuple] = types.MappingProxyType({})
+) -> tuple[str, ...]:
+    """
+    Signal NON bloquant, complémentaire de currency_level_advisories() : au lieu
+    d'une thèse macro implicite déduite d'un setup prioritaire, compare chaque
+    jambe du setup aux signaux TECHNIQUES réels (CHoCH etc.) déjà calculés par
+    le moteur pour cette devise sur d'AUTRES paires (merged_pipeline.json ::
+    correlation_groups, transporté depuis le round du 27/07/2026).
+
+    Différence avec currency_level_advisories() : ici la contradiction vient
+    d'un signal technique confirmé sur un autre instrument (ex. XAU/USD et
+    NAS100/USD déjà baissiers en USD), pas d'une extrapolation macro. Ne
+    change jamais `state` — même contrat que toutes les autres advisories.
+    """
+    legs = setup.leg_currencies()
+    if legs is None or not correlation_groups:
+        return ()
+    long_ccy, short_ccy = legs
+    advisories: list[str] = []
+
+    for currency, leg_direction in ((long_ccy, Direction.LONG), (short_ccy, Direction.SHORT)):
+        for sig in correlation_groups.get(currency, ()):
+            if sig.symbol == setup.pair or sig.direction is None or "/" not in sig.symbol:
+                continue  # même paire, signal Neutral, ou instrument non pairé (rien à inverser)
+            sig_base, sig_quote = sig.symbol.split("/")
+            if currency == sig_base:
+                implied_dir = sig.direction
+            elif currency == sig_quote:
+                implied_dir = Direction.SHORT if sig.direction == Direction.LONG else Direction.LONG
+            else:
+                continue  # ne devrait pas arriver (clé du dict != devise du symbole), garde défensive
+            if implied_dir != leg_direction:
+                advisories.append(
+                    f"devise {currency} : signal technique {sig.kind} confirme {currency} "
+                    f"{implied_dir.value.upper()} via {sig.symbol} ({sig.timeframe}, qualité "
+                    f"{sig.quality}), contredit la jambe {leg_direction.value} de ce setup — "
+                    f"non bloquant, corrélation technique réelle (pas une extrapolation macro)"
+                )
+    return tuple(advisories)
+
+
 def echo_leg(currency_code: str, is_long_leg: bool, macro: MacroSnapshot) -> LegEcho:
     """
     Prédicat gelé évaluant une seule jambe (une devise) d'un setup.
@@ -274,11 +318,19 @@ def _macro_priority_conflict(setup: DeskSetup, macro: MacroSnapshot) -> str | No
     return None
 
 
-def decide_setup(setup: DeskSetup, macro: MacroSnapshot) -> Decision:
+def decide_setup(
+    setup: DeskSetup, macro: MacroSnapshot,
+    correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
+) -> Decision:
     """Fonction pure : (DeskSetup, MacroSnapshot) -> Decision.
-    Aucun effet de bord, aucun I/O — testable par golden files (cf. tests/)."""
+    Aucun effet de bord, aucun I/O — testable par golden files (cf. tests/).
 
-    advisories = currency_level_advisories(setup, macro)
+    `correlation_groups` est optionnel (PATCH-CORRGROUPS, round du 28/07/2026) :
+    absent, la fonction se comporte exactement comme avant ce round."""
+
+    advisories = currency_level_advisories(setup, macro) + technical_currency_advisories(
+        setup, correlation_groups
+    )
 
     # --- Niveau 1 : intégrité / invalidation ---------------------------------
     if setup.age_days is not None and setup.age_days > MAX_TECH_AGE_DAYS:
@@ -389,6 +441,32 @@ _REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
     "RR_OUT_OF_RANGE": (DecisionState.REJECT, "risk_reward"),
     "PRICE_PAST_TP": (DecisionState.BLOCKED_DATA, "price"),
     "CLUSTER_DUP": (DecisionState.WATCH, "cluster"),
+    # --- Ajout round d'audit du 27/07/2026 (lecture directe de ENGINE.V9.py) ---
+    # Ces 6 codes existent réellement dans le moteur (GateCode + preflight)
+    # mais n'étaient routés nulle part avant ce correctif : ils tombaient dans
+    # le repli générique (REJECT, "reject_code_inconnu"), un état arbitraire
+    # pour des cas qui ne sont pas tous de même nature.
+    "CAL_BLACKOUT": (DecisionState.BLOCKED_DATA, "calendar"),
+    # Suspension temporaire liée au calendrier macro, pas un jugement
+    # technique définitif — le moteur lui-même la traite à part de ses vrais
+    # rejets (bloc "SUSPENDUS", distinct du tableau "REJETS" dans son propre
+    # template). BLOCKED_DATA reflète ce même distinguo côté comité, plutôt
+    # que le REJECT générique qui gommerait la différence.
+    "SCHEMA_ASSET_ERROR": (DecisionState.BLOCKED_DATA, "integrity"),
+    # Anomalie d'intégrité des données en amont (MTF manquant) — pas un
+    # jugement sur le setup lui-même.
+    "NO_ATR": (DecisionState.BLOCKED_DATA, "missing_data"),
+    # Donnée technique requise absente (ATR ≤ 0) — même logique que
+    # SCHEMA_ASSET_ERROR : donnée manquante, pas actif jugé et écarté.
+    "NO_DIRECTION": (DecisionState.REJECT, "no_direction"),
+    # Consensus MTF neutre : un vrai jugement technique ("pas de direction
+    # exploitable"), donc REJECT au même titre que LOW_QUALITY.
+    "LOW_CONSENSUS": (DecisionState.REJECT, "consensus"),
+    # Même famille que LOW_QUALITY/LOW_CONVICTION : seuil technique non
+    # atteint, jugement définitif pour ce cycle.
+    "SL_SIGN": (DecisionState.BLOCKED_DATA, "computation_error"),
+    # Anomalie de calcul interne (stop-loss du mauvais côté de l'entrée) —
+    # signale un problème de génération du setup, pas un jugement de marché.
 }
 
 
@@ -440,7 +518,7 @@ def decide_all(
     include_rejects=False restaure l'ancien comportement (setups valides
     seuls) pour compatibilite explicite, opt-in — jamais le defaut
     silencieux."""
-    decisions = [decide_setup(s, macro) for s in desk.setups]
+    decisions = [decide_setup(s, macro, desk.correlation_groups) for s in desk.setups]
     if include_rejects:
         decisions.extend(decide_rejection(r, macro) for r in desk.rejected)
     decisions_t = tuple(decisions)
