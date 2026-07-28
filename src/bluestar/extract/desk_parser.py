@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from bs4 import BeautifulSoup, Tag
 
 from bluestar.errors import DeskDocumentError
-from bluestar.models import DeskRejectedSetup, DeskSetup, DeskSnapshot, Direction
+from bluestar.models import CorrelationSignal, DeskRejectedSetup, DeskSetup, DeskSnapshot, Direction
 
 logger = logging.getLogger("bluestar.extract.desk")
 
@@ -261,6 +262,50 @@ def _parse_setup(block: Tag) -> DeskSetup:
     )
 
 
+_JSON_DIRECTION_MAP = {"Bullish": Direction.LONG, "Bearish": Direction.SHORT}
+# "Neutral" (et toute valeur non reconnue) -> None : le modèle Direction du
+# comité n'a que long/short, même choix que pour _parse_rejected().
+
+
+def _parse_correlation_groups(soup: BeautifulSoup) -> dict[str, tuple[CorrelationSignal, ...]]:
+    """Lit le bloc `<script id="correlation-groups">` embarqué par le moteur
+    depuis le correctif du 27/07/2026. Absent (document produit par un moteur
+    plus ancien) ou malformé -> dict vide, jamais une erreur : c'est une
+    donnée d'appoint pour les advisories, elle ne conditionne aucune décision
+    et son absence ne rend pas le document desk invalide."""
+    tag = soup.find("script", id="correlation-groups")
+    if tag is None or not tag.string:
+        return {}
+    try:
+        raw = json.loads(tag.string)
+    except json.JSONDecodeError:
+        logger.warning("correlation_groups_json_invalide — ignoré, advisories techniques indisponibles ce cycle")
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict[str, tuple[CorrelationSignal, ...]] = {}
+    for currency, signals in raw.items():
+        if not isinstance(signals, list):
+            continue
+        parsed = []
+        for s in signals:
+            if not isinstance(s, dict) or "symbol" not in s:
+                continue
+            parsed.append(CorrelationSignal(
+                symbol=s.get("symbol", "non disponible dans les documents fournis"),
+                direction=_JSON_DIRECTION_MAP.get(s.get("direction")),
+                kind=s.get("kind", "non disponible dans les documents fournis"),
+                timeframe=s.get("timeframe", "non disponible dans les documents fournis"),
+                mtf_pct=s.get("mtf_pct"),
+                quality=s.get("quality", "non disponible dans les documents fournis"),
+                confluence=s.get("confluence"),
+            ))
+        if parsed:
+            out[currency] = tuple(parsed)
+    return out
+
+
 def _parse_rejected(soup: BeautifulSoup) -> tuple[DeskRejectedSetup, ...]:
     rejects = []
     for code_tag in soup.find_all(class_="reject-code"):
@@ -275,6 +320,16 @@ def _parse_rejected(soup: BeautifulSoup) -> tuple[DeskRejectedSetup, ...]:
             direction = Direction.LONG
         elif "Bearish" in row_text:
             direction = Direction.SHORT
+        elif "Neutral" not in row_text:
+            # Direction ni Bullish, ni Bearish, ni Neutral : le modèle Direction
+            # du comité (long/short uniquement) ne peut représenter qu'un
+            # None ici de toute façon, mais ce cas précis n'est pas un Neutral
+            # légitime — c'est un texte de direction non reconnu, à signaler
+            # plutôt que laisser confondre les deux silencieusement.
+            logger.warning(
+                "desk_reject_direction_unrecognized pair=%s row=%.80s",
+                pair, row_text,
+            )
         rejects.append(DeskRejectedSetup(
             pair=pair,
             direction=direction,
@@ -294,6 +349,7 @@ def parse_desk(html: str) -> DeskSnapshot:
 
     setups = tuple(_parse_setup(block) for block in soup.find_all(class_="setup"))
     rejected = _parse_rejected(soup)
+    correlation_groups = _parse_correlation_groups(soup)
 
     if len(setups) + len(rejected) != universe_total:
         logger.warning(
@@ -311,6 +367,7 @@ def parse_desk(html: str) -> DeskSnapshot:
         themes=themes,
         setups=setups,
         rejected=rejected,
+        correlation_groups=correlation_groups,
     )
     logger.info(
         "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
