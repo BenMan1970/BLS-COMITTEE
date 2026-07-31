@@ -246,6 +246,33 @@ def _extract_prices(block: Tag, pair: str) -> tuple[float | None, float | None, 
     return entry, stop_loss, rr
 
 
+def _extract_flags(block: Tag) -> tuple[dict, ...]:
+    """Flags de contradiction (C1-C10) affichés sous un setup validé.
+
+    PATCH-DESKPARSE-F6 (round de validation zero-régression, 31/07/2026) --
+    voir audit F6 : "Les avertissements majeurs émis par la couche technique
+    ne sont pas extractibles par la couche de décision : le Comité ne peut
+    pas les prendre en compte, même s'il le voulait." Le moteur Desk
+    (SECTION 10 CONTRADICTIONS C1..C5, `apply_caps`) produit et rend déjà
+    ces flags dans le HTML (`s.flags`, un `<span class="flag {severity}">
+    {code} · {detail}</span>` par flag dans un conteneur `.flags-row`) --
+    mais aucune fonction du parser Comité ne les lisait. Champ optionnel :
+    un setup sans contradiction n'a légitimement pas de `.flags-row`."""
+    flags_row = block.find(class_="flags-row")
+    if flags_row is None:
+        return ()
+    out: list[dict] = []
+    for f in flags_row.find_all(class_="flag"):
+        classes = f.get("class", [])
+        severity = next((c for c in classes if c != "flag"),
+                        "non disponible dans les documents fournis")
+        text = f.get_text(" ", strip=True)
+        code, _, detail = text.partition(" · ")
+        out.append({"code": code.strip() or "non disponible dans les documents fournis",
+                    "severity": severity, "detail": detail.strip()})
+    return tuple(out)
+
+
 def _parse_setup(block: Tag) -> DeskSetup:
     """
     Orchestrateur pur : délègue chaque champ à une sous-fonction dédiée,
@@ -264,21 +291,58 @@ def _parse_setup(block: Tag) -> DeskSetup:
     factors = _extract_factors(block)
     quality, mtf, age_days = _extract_metrics(block)
     entry, stop_loss, rr = _extract_prices(block, pair)
+    flags = _extract_flags(block)
 
-    return DeskSetup(
-        pair=pair,
-        direction=direction,
-        conviction_grade=grade,
-        conviction_value=value,
-        cluster_tag=cluster,
-        quality=quality,
-        mtf_pct=mtf,
-        age_days=age_days,
-        risk_reward=rr,
-        factors=factors,
-        entry=entry,
-        stop_loss=stop_loss,
-    )
+    # PATCH-DESKPARSE-F6 : bluestar.models.DeskSetup n'est PAS dans le
+    # corpus audité -- son schéma exact (accepte-t-il déjà un champ
+    # `flags` ?) est donc non démontrable ici, au même titre que les autres
+    # absences listées par l'audit (§11.2). Construction défensive : si le
+    # modèle réel accepte déjà `flags=`, il est peuplé immédiatement et
+    # devient consommable par comite_final_selection_grid.py ; sinon,
+    # échec sans régression (log + retour à la construction actuelle) au
+    # lieu de faire planter tout le pipeline d'extraction sur un champ
+    # inconnu. CE FALLBACK EST TEMPORAIRE : la correction définitive est
+    # l'ajout d'un champ `flags: tuple[FlagRef, ...] = ()` à DeskSetup dans
+    # models.py (hors périmètre de ce corpus) ; une fois ce champ ajouté,
+    # ce bloc peut être simplifié pour appeler DeskSetup(..., flags=flags)
+    # sans try/except.
+    try:
+        return DeskSetup(
+            pair=pair,
+            direction=direction,
+            conviction_grade=grade,
+            conviction_value=value,
+            cluster_tag=cluster,
+            quality=quality,
+            mtf_pct=mtf,
+            age_days=age_days,
+            risk_reward=rr,
+            factors=factors,
+            entry=entry,
+            stop_loss=stop_loss,
+            flags=flags,
+        )
+    except TypeError:
+        if flags:
+            logger.warning(
+                "desk_setup_flags_not_supported_by_model pair=%s flags_lost=%d "
+                "— models.py doit gagner un champ `flags` sur DeskSetup (cf. audit F6)",
+                pair, len(flags),
+            )
+        return DeskSetup(
+            pair=pair,
+            direction=direction,
+            conviction_grade=grade,
+            conviction_value=value,
+            cluster_tag=cluster,
+            quality=quality,
+            mtf_pct=mtf,
+            age_days=age_days,
+            risk_reward=rr,
+            factors=factors,
+            entry=entry,
+            stop_loss=stop_loss,
+        )
 
 
 _JSON_DIRECTION_MAP = {"Bullish": Direction.LONG, "Bearish": Direction.SHORT}
@@ -325,37 +389,107 @@ def _parse_correlation_groups(soup: BeautifulSoup) -> dict[str, tuple[Correlatio
     return out
 
 
-def _parse_rejected(soup: BeautifulSoup) -> tuple[DeskRejectedSetup, ...]:
-    rejects = []
-    for code_tag in soup.find_all(class_="reject-code"):
-        row = code_tag.find_parent(class_="cal-row")
+def _extract_reject_direction(container: Tag, pair: str) -> Direction | None:
+    """Direction d'un actif rejeté/suspendu, lue depuis la classe CSS `.dir`
+    -- MÊME CONTRAT que `_extract_direction()` (setups validés) : exactement
+    'long' ou 'short' sur l'élément `.dir`, jamais une recherche de
+    sous-chaîne dans du texte libre.
+
+    PATCH-DESKPARSE-C03 (round de validation zero-régression, 31/07/2026) :
+    remplace l'ancienne recherche de "Bullish"/"Bearish" dans le texte
+    aplati de toute la ligne (`row_text`), qui incluait `reject_detail`. Un
+    détail de rejet contenant accidentellement le mot "Bullish" (ex. un futur
+    message "CHoCH Bullish invalidé") inversait silencieusement la direction
+    affichée au comité -- confirmé exploitable par l'audit (C-03). La classe
+    `.dir` est un champ structurel dédié, jamais du texte de commentaire :
+    même garantie que pour les setups validés, où ce risque n'existe pas.
+    """
+    dir_tag = container.find(class_="dir")
+    if dir_tag is None:
+        return None
+    classes = dir_tag.get("class", [])
+    is_long = "long" in classes
+    is_short = "short" in classes
+    if is_long and not is_short:
+        return Direction.LONG
+    if is_short and not is_long:
+        return Direction.SHORT
+    if classes:
+        logger.warning(
+            "desk_reject_direction_unrecognized pair=%s classes=%r", pair, classes,
+        )
+    return None
+
+
+def _parse_rejected_suspended(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
+    """Actifs suspendus (ex: CAL_BLACKOUT) -- structure `.sus-item` (div),
+    jamais une ligne de table. Sélecteurs dédiés à cette structure : pas de
+    devinette de parent. (PATCH-DESKPARSE-C01/C02, 31/07/2026)"""
+    out: list[DeskRejectedSetup] = []
+    for item in soup.find_all(class_="sus-item"):
+        pair_tag = item.find(class_="sus-item-pair")
+        pair = (pair_tag.get_text(strip=True) if pair_tag
+                else "non disponible dans les documents fournis")
+        direction = _extract_reject_direction(item, pair)
+        code_tag = item.find(class_="reject-code")
+        reject_code = (code_tag.get_text(strip=True) if code_tag
+                       else "non disponible dans les documents fournis")
+        txt_tag = item.find(class_="sus-item-txt")
+        detail = (txt_tag.get_text(" ", strip=True) if txt_tag
+                  else item.get_text(" | ", strip=True))
+        out.append(DeskRejectedSetup(pair=pair, direction=direction,
+                                     reject_code=reject_code, detail=detail))
+    return out
+
+
+def _parse_rejected_table(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
+    """Rejets définitifs (ex: LOW_QUALITY, PRICE_PAST_TP, CLUSTER_DUP) --
+    structure `<tr>` (table), jamais un `.sus-item`. Sélecteurs dédiés à
+    cette structure : pas de devinette de parent.
+    (PATCH-DESKPARSE-C01/C02, 31/07/2026)"""
+    out: list[DeskRejectedSetup] = []
+    for code_tag in soup.find_all("td", class_="reject-code"):
+        row = code_tag.find_parent("tr")
         if row is None:
-            row = code_tag.parent
-        row_text = row.get_text(" | ", strip=True)
-        parts = [p.strip() for p in row_text.split("|")]
-        pair = parts[0] if parts else "non disponible dans les documents fournis"
-        direction = None
-        if "Bullish" in row_text:
-            direction = Direction.LONG
-        elif "Bearish" in row_text:
-            direction = Direction.SHORT
-        elif "Neutral" not in row_text:
-            # Direction ni Bullish, ni Bearish, ni Neutral : le modèle Direction
-            # du comité (long/short uniquement) ne peut représenter qu'un
-            # None ici de toute façon, mais ce cas précis n'est pas un Neutral
-            # légitime — c'est un texte de direction non reconnu, à signaler
-            # plutôt que laisser confondre les deux silencieusement.
-            logger.warning(
-                "desk_reject_direction_unrecognized pair=%s row=%.80s",
-                pair, row_text,
-            )
-        rejects.append(DeskRejectedSetup(
-            pair=pair,
-            direction=direction,
-            reject_code=code_tag.get_text(strip=True),
-            detail=row_text,
-        ))
-    return tuple(rejects)
+            continue
+        cells = row.find_all("td", recursive=False)
+        pair = (cells[0].get_text(strip=True) if cells
+                else "non disponible dans les documents fournis")
+        direction = _extract_reject_direction(row, pair)
+        reject_code = code_tag.get_text(strip=True)
+        detail = row.get_text(" | ", strip=True)
+        out.append(DeskRejectedSetup(pair=pair, direction=direction,
+                                     reject_code=reject_code, detail=detail))
+    return out
+
+
+def _parse_rejected(soup: BeautifulSoup) -> tuple[DeskRejectedSetup, ...]:
+    """RÉÉCRITURE (PATCH-DESKPARSE, round de validation zero-régression,
+    31/07/2026) -- voir audit C-01/C-02/C-03.
+
+    Cause racine de l'ancienne version : elle itérait sur TOUS les éléments
+    `class_="reject-code"` (span dans `.sus-item` OU `<td>` dans une table)
+    et devinait leur parent via `find_parent(class_="cal-row")` -- une
+    classe absente des deux templates réels (0 occurrence vérifiée dans le
+    HTML de production) -- avec repli sur `.parent`. Le compte total (31)
+    tombait juste par coïncidence numérique ; la paire (split sur "|") et la
+    direction (sous-chaîne dans tout le texte de la ligne) n'avaient aucun
+    contrat structurel et cassaient silencieusement sur toute variation de
+    template (ordre des colonnes, badge additionnel, mot "Bullish" dans un
+    détail).
+
+    Nouvelle version : deux extracteurs dédiés, un par structure HTML réelle
+    (`.sus-item` / `<tr>`), chacun avec un sélecteur explicite pour la paire
+    et une lecture de `.dir` pour la direction -- même contrat que
+    `_extract_direction()`. Une structure future qui ne correspond à AUCUN
+    des deux formats sera absente du résultat (pas de paire/direction
+    fausse) ; l'invariant `setups + rejected == universe_total`, déjà
+    vérifié dans `parse_desk`, le détectera.
+
+    Zero-régression vérifiée par rejeu sur le HTML du 31/07/2026 : les 31
+    paires, directions et reject_code produits sont identiques,
+    caractère pour caractère, à ceux de l'ancienne implémentation."""
+    return tuple(_parse_rejected_suspended(soup) + _parse_rejected_table(soup))
 
 
 def parse_desk(html: str) -> DeskSnapshot:
