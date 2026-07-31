@@ -467,6 +467,26 @@ _REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
     "SL_SIGN": (DecisionState.BLOCKED_DATA, "computation_error"),
     # Anomalie de calcul interne (stop-loss du mauvais côté de l'entrée) —
     # signale un problème de génération du setup, pas un jugement de marché.
+    # --- PATCH-CLUSTERDUP (round du 31/07/2026) ---
+    # Nouveaux codes émis par v10.py après correction de diversify() (même
+    # round). AVANT ce patch, exposition-devise, corrélation et dépassement
+    # de MAX_SETUPS tombaient tous sous l'étiquette CLUSTER_DUP (faux :
+    # aucun des trois n'est un doublon de cluster). Même état WATCH que
+    # CLUSTER_DUP par cohérence : dans les quatre cas, ce n'est pas une
+    # faute du setup lui-même, c'est une contrainte de construction de
+    # portefeuille (exposition, corrélation, capacité), pas un jugement
+    # technique définitif comme LOW_QUALITY/NO_DIRECTION.
+    #
+    # DÉPLOIEMENT ATOMIQUE OBLIGATOIRE avec le patch v10.py correspondant.
+    # Vérifié par exécution (round du 31/07/2026) : si v10.py émet ces
+    # codes sans que cette table soit mise à jour, decide_rejection()
+    # route vers le repli (DecisionState.REJECT, "reject_code_inconnu") —
+    # un setup simplement capé par une limite de portefeuille se
+    # retrouverait promu REJECT dur, une régression de sévérité pire que
+    # le bug d'origine (CLUSTER_DUP au moins routait déjà vers WATCH).
+    "EXPOSURE_CAP": (DecisionState.WATCH, "exposure"),
+    "CORRELATION_CAP": (DecisionState.WATCH, "correlation"),
+    "MAX_SETUPS_REACHED": (DecisionState.WATCH, "capacity"),
 }
 
 
@@ -526,3 +546,4 @@ def decide_all(
     logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s",
                 GRID_VERSION, len(decisions_t), dict(counts), include_rejects)
     return decisions_t
+  
