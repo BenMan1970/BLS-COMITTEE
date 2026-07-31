@@ -61,11 +61,30 @@ def _parse_event_risk(soup: BeautifulSoup) -> str:
 
 
 def _parse_themes(soup: BeautifulSoup) -> tuple[str, ...]:
-    text = soup.find(class_="page-subbar").get_text(" ", strip=True)
-    m = re.search(r"Th[eè]mes\s*:\s*(.+?)(?:CONFIDENTIEL|$)", text)
-    if not m:
+    """PATCH-THEMES-BLEED (round du 31/07/2026) : l'ancienne version regexait
+    le texte aplati de tout le page-subbar avec une frontière
+    "(?:CONFIDENTIEL|$)" -- si un badge (ex. "SR indisponible · mode ATR")
+    s'intercalait entre le span Thèmes et le span CONFIDENTIEL, il était
+    absorbé dans le dernier thème. Confirmé par exécution sur le rapport du
+    29/07/2026 : le thème NZD devenait "NZD Bearish SR indisponible · mode
+    ATR" au lieu de "NZD Bearish".
+
+    Correctif : chaque bloc du bandeau est un <span> FRÈRE indépendant dans
+    le template (jamais imbriqué) -- on ancre donc sur le span lui-même
+    plutôt que sur le texte aplati du conteneur. Un badge futur ajouté entre
+    Thèmes et CONFIDENTIEL ne peut plus fuiter, quel que soit son contenu.
+    Testé avec/sans badge SR, avec/sans thèmes présents — comportement
+    identique à l'ancienne version dans les deux cas où elle était correcte,
+    corrigé dans le cas où elle ne l'était pas."""
+    subbar = soup.find(class_="page-subbar")
+    if subbar is None:
         return ()
-    return tuple(t.strip() for t in m.group(1).split(",") if t.strip())
+    for span in subbar.find_all("span", recursive=False):
+        text = span.get_text(" ", strip=True)
+        m = re.match(r"Th[eè]mes\s*:\s*(.+)", text)
+        if m:
+            return tuple(t.strip() for t in m.group(1).split(",") if t.strip())
+    return ()
 
 
 _FACTOR_LABEL_RE = re.compile(r"^(F\d|Q-rang)")
