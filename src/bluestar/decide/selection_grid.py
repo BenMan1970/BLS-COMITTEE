@@ -19,10 +19,12 @@ fichier, jamais une interprétation au moment de la décision.
 from __future__ import annotations
 
 import logging
+import re
 import types
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from bluestar.models import (
@@ -57,12 +59,56 @@ logger = logging.getLogger("bluestar.decide")
 # ---------------------------------------------------------------------------
 MAX_TECH_AGE_DAYS = 45          # NON CALIBRÉ — valeur provisoire de l'auteur, pas un empirique
 MIN_RISK_REWARD = 1.5           # NON CALIBRÉ — valeur provisoire de l'auteur, pas un empirique
+                                # NOTE F-09 (audit 31/07/2026) : cette garde est aujourd'hui
+                                # INATTEIGNABLE car le preflight Desk rejette déjà tout R:R < 1.5
+                                # (RR_OUT_OF_RANGE) en amont. Elle est CONSERVÉE volontairement :
+                                # une couche de validation indépendante doit re-vérifier les
+                                # invariants de la couche précédente — elle redevient active
+                                # automatiquement si le seuil Desk est un jour abaissé.
 MAX_IPS_AGE_DAYS_WARN = 5       # RÉSERVÉ, NON CÂBLÉ — déclaré mais aucun code ne le consulte
                                  # encore (décote de fraîcheur IPS = roadmap, pas implémentée).
                                  # Volontairement non utilisé plutôt que silencieusement ignoré :
                                  # tout futur retrait ou activation doit passer par ce commentaire.
-GRID_VERSION = "bluestar-decide-v2.2"  # incremente : invariant 33/33 (rejets desk routes +
-                                        # mode jambe unique indices/metaux) - round audit 27/07/2026
+MAX_DESK_DOC_AGE_H = 3.0        # NON CALIBRÉ — garde de fraîcheur documentaire (audit B-2,
+                                # round 31/07/2026). Au-delà, les setups (pas les rejets, qui
+                                # restent des faits historiques) sont rétrogradés BLOCKED_DATA.
+                                # Cas motivant : rapport du 31/07 publiant un WATCH sur un
+                                # snapshot desk âgé de 3h37, 8 minutes avant un tier A.
+GRID_VERSION = "bluestar-decide-v2.3"  # incremente : canal flags/cal_status, garde de fraicheur,
+                                        # double conflit de jambes, contre-reference CLUSTER_DUP
+                                        # - round de validation independante du 31/07/2026
+
+
+# Libellés d'advisory associés au statut calendaire par setup (PATCH-CALSTATUS,
+# audit F-05/C-04). BLACKOUT n'y figure pas volontairement : un setup en
+# blackout ne parvient jamais jusqu'ici (le Desk le route en CAL_BLACKOUT, donc
+# en decide_rejection, pas en decide_setup).
+_CAL_STATUS_ADVISORY = {"PROXIMITY": "proximité calendaire", "WATCH": "surveillance calendaire"}
+
+_TZ_OFFSET_RE = re.compile(r"^GMT([+-])(\d+)$")
+
+
+def _desk_doc_datetime(desk: DeskSnapshot) -> datetime | None:
+    """Recompose l'horodatage UTC du document desk depuis les champs parsés
+    (PATCH-FRESHNESS, audit B-2). None si non vérifiable — jamais de devinette."""
+    try:
+        dt_naive = datetime.strptime(desk.report_datetime, "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return None
+    tzs = (desk.report_timezone or "").upper()
+    if tzs in ("UTC", "GMT"):
+        tz = timezone.utc
+    elif tzs == "CET":
+        tz = timezone(timedelta(hours=1))
+    elif tzs == "CEST":
+        tz = timezone(timedelta(hours=2))
+    else:
+        m = _TZ_OFFSET_RE.match(tzs)
+        if not m:
+            return None
+        sign = 1 if m.group(1) == "+" else -1
+        tz = timezone(sign * timedelta(hours=int(m.group(2))))
+    return dt_naive.replace(tzinfo=tz)
 
 
 class LegVerdict(str, Enum):
@@ -173,13 +219,6 @@ class Decision:
     grid_version: str = GRID_VERSION
     asset_class: AssetClass = AssetClass.FX_PAIR
     source_reject_code: str | None = None
-    # PATCH-MACROCHANNEL (round de validation zero-régression, 31/07/2026) --
-    # voir audit B-4 / F-03 / C-01 (rapport harnais round 3) : "Lorsque
-    # macro.priority_setups est vide, [...] le rapport final doit le dire."
-    # Champs additifs, défauts inertes -- aucun appelant existant qui
-    # construit un Decision sans ces deux arguments n'est affecté.
-    macro_channel_empty: bool = False
-    macro_channel_note: str = ""
 
 
 def _implied_macro_currency_bias(macro: MacroSnapshot) -> dict[str, list[tuple[Direction, str, int]]]:
@@ -417,14 +456,25 @@ def _decide_setup_core(
     # --- Niveau 3 : grille par jambe -----------------------------------------
     verdicts = {leg_long.verdict, leg_short.verdict}
 
-    if LegVerdict.CONFLIT in verdicts:
-        conflicting = leg_long if leg_long.verdict == LegVerdict.CONFLIT else leg_short
+    conflicting_legs = [leg for leg in leg_echoes if leg.verdict == LegVerdict.CONFLIT]
+    if conflicting_legs:
+        # PATCH-C05 (round du 31/07/2026, audit C-05/F-12) : l'ancienne version
+        # ne retenait que le PREMIER CONFLIT — un setup dont les deux jambes sont
+        # en capitulation (ex. EUR 10 / CAD 8) n'en citait qu'une, masquant au
+        # lecteur final que le squeeze pouvait se déclencher des deux côtés
+        # (symétrie avec _build_setup_positioning côté macro, qui gère déjà le
+        # cas "DEUX jambes extrêmes"). Le cas mono-conflit produit une chaîne
+        # strictement identique à avant ce patch.
+        if len(conflicting_legs) == 1:
+            limiting = (f"conflit de positionnement sur la jambe "
+                        f"{conflicting_legs[0].currency} ({conflicting_legs[0].detail})")
+        else:
+            limiting = ("conflit de positionnement sur les DEUX jambes — "
+                        + " ; ".join(f"jambe {c.currency} ({c.detail})" for c in conflicting_legs)
+                        + " — squeeze possible dans les deux sens")
         return Decision(
             pair=setup.pair, direction=setup.direction, state=DecisionState.WATCH,
-            legs=leg_echoes, limiting_factor=(
-                f"conflit de positionnement sur la jambe {conflicting.currency} "
-                f"({conflicting.detail})"
-            ),
+            legs=leg_echoes, limiting_factor=limiting,
             advisories=advisories,
         )
 
@@ -508,60 +558,35 @@ def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) ->
     )
 
 
-def _macro_channel_state(macro: MacroSnapshot) -> tuple[bool, str]:
-    """PATCH-MACROCHANNEL (round de validation zero-régression, 31/07/2026)
-    -- voir audit B-4 / F-03 / C-01 : "Lorsque macro.priority_setups est
-    vide, ou lorsqu'une décision est prise sans aucune entrée macro, le
-    rapport final doit le dire." (cf. aussi F-03 : `decide_rejection` avait
-    un paramètre `macro` jamais lu dans son corps -- ce constat en fait
-    désormais un usage réel, sans changer aucun routage existant.)
-
-    Ne juge rien, ne bloque rien, ne change aucun `state` : constate
-    uniquement si le canal macro directionnel (`macro.priority_setups`)
-    était vide au moment de la décision. C'est la distinction que l'audit
-    reproche à l'absence de section dédiée dans le rapport final : « aucun
-    conflit macro » (vérifié positivement) et « aucune thèse macro
-    n'existait pour comparer » (silence structurel) ne sont pas le même
-    fait, et étaient indiscernables pour le lecteur avant ce correctif."""
-    if not macro.priority_setups:
-        return True, (
-            "canal macro vide (macro.priority_setups) : cette décision n'a "
-            "reçu aucune thèse directionnelle macro à comparer -- l'absence "
-            "d'advisory ou de conflit affichée ci-dessus signifie "
-            "'rien à comparer', pas 'validé par le macro'"
-        )
-    return False, ""
-
-
-def _augment_with_macro_channel_state(decision: Decision, macro: MacroSnapshot) -> Decision:
-    """Câble `_macro_channel_state()` sur la `Decision` finale.
-
-    Garanties de non-régression, identiques dans l'esprit à
-    `_augment_limiting_factor_with_flags` : ne touche jamais `state`,
-    `limiting_factor`, `advisories` ni aucun autre champ préexistant --
-    seuls les deux nouveaux champs `macro_channel_empty` /
-    `macro_channel_note` sont renseignés, et uniquement quand le canal est
-    effectivement vide (sinon `decision` est retournée strictement
-    inchangée)."""
-    empty, note = _macro_channel_state(macro)
-    if not empty:
-        return decision
-    return replace(decision, macro_channel_empty=True, macro_channel_note=note)
-
-
 def decide_setup(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
 ) -> Decision:
     """Point d'entrée public, comportement inchangé pour tout appelant
     existant (même signature, même import path) -- voir `_decide_setup_core`
-    pour la logique de décision elle-même, `_augment_limiting_factor_with_flags`
+    pour la logique de décision elle-même et `_augment_limiting_factor_with_flags`
     pour le correctif F6-BIS (câblage des flags Desk C1-C10 majeurs dans le
-    limiting_factor affiché au Comité) et `_augment_with_macro_channel_state`
-    pour le correctif B-4/F-03 (déclaration explicite d'un canal macro vide)."""
+    limiting_factor affiché au Comité)."""
     decision = _decide_setup_core(setup, macro, correlation_groups)
     decision = _augment_limiting_factor_with_flags(decision, setup)
-    return _augment_with_macro_channel_state(decision, macro)
+    # PATCH-CALSTATUS (round du 31/07/2026, audit F-05/C-04) : le statut
+    # calendaire par setup (OK/PROXIMITY/WATCH), rendu par le Desk dans
+    # `.cal-row` mais jamais extrait avant le patch parser associé, est
+    # surfacé ici en advisory NON bloquant. `getattr` défensif : tant que
+    # DeskSetup ne porte pas le champ (schéma avant patch models.py B-1),
+    # la sortie est strictement identique à avant.
+    cal_status = getattr(setup, "cal_status", None)
+    if cal_status in _CAL_STATUS_ADVISORY:
+        cal_note = getattr(setup, "cal_note", "") or ""
+        decision = replace(
+            decision,
+            advisories=decision.advisories + (
+                f"statut calendaire Desk : {cal_status} — {_CAL_STATUS_ADVISORY[cal_status]}"
+                + (f" ({cal_note})" if cal_note else "")
+                + " — non bloquant ici, à arbitrer avant toute action sur ce setup",
+            ),
+        )
+    return decision
 
 
 _REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
@@ -629,6 +654,9 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
     donc pas ces setups au niveau macro ; il trace une decision motivee
     pour chacun, ce qui ferme l'invariant 33/33 sans pretendre a une
     re-analyse qu'aucune donnee ne permettrait de justifier."""
+    # F-03 (audit 31/07/2026) : `macro` est volontairement non lu — voir
+    # docstring ci-dessus. Parametre conserve pour la stabilite de l'API.
+    _ = macro
     asset_class = classify_asset(rejected.pair)
     state, _leg_key = _REJECT_CODE_ROUTES.get(
         rejected.reject_code, (DecisionState.REJECT, "reject_code_inconnu")
@@ -645,7 +673,7 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
             "doublon n'est pas promu automatiquement en ELIGIBLE.",
         )
 
-    decision = Decision(
+    return Decision(
         pair=rejected.pair,
         direction=rejected.direction,
         state=state,
@@ -655,16 +683,11 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
         asset_class=asset_class,
         source_reject_code=rejected.reject_code,
     )
-    # PATCH-MACROCHANNEL : `macro` n'est plus un paramètre mort (cf. audit
-    # F-03/C-01) -- il sert désormais à déclarer si le canal macro était
-    # vide au moment de ce rejet, sans changer `state` ni aucun autre champ
-    # du routage ci-dessus (identique à `decide_setup`, cf.
-    # `_augment_with_macro_channel_state`).
-    return _augment_with_macro_channel_state(decision, macro)
 
 
 def decide_all(
-    desk: DeskSnapshot, macro: MacroSnapshot, *, include_rejects: bool = True
+    desk: DeskSnapshot, macro: MacroSnapshot, *, include_rejects: bool = True,
+    now: datetime | None = None,
 ) -> tuple[Decision, ...]:
     """Applique decide_setup a tous les setups valides du desk et, par
     defaut, decide_rejection a tous les rejets desk — invariant souverain
@@ -672,31 +695,72 @@ def decide_all(
 
     include_rejects=False restaure l'ancien comportement (setups valides
     seuls) pour compatibilite explicite, opt-in — jamais le defaut
-    silencieux."""
+    silencieux.
+
+    now=None (defaut) preserve la purete de la fonction pour les golden
+    files : la garde de fraicheur documentaire (audit B-2) ne s'active que
+    si l'appelant fournit explicitement l'horloge (cf. cli.py)."""
+    # PATCH-B4 (round du 31/07/2026, audit F-03/B-4) : quand le canal
+    # directionnel macro est vide, le garde-fou _macro_priority_conflict et
+    # le producteur currency_level_advisories sont structurellement inertes
+    # — "Advisories : aucun" signifie alors "aucune these macro n'existait",
+    # pas "aucun conflit macro". Doit etre declare dans le rapport final.
+    if not macro.priority_setups:
+        logger.warning(
+            "macro_priority_setups_empty — canal directionnel macro INERTE ce cycle : "
+            "garde _macro_priority_conflict et advisories currency-level desactives. "
+            "Le rapport final doit le declarer (audit B-4)."
+        )
+
     decisions = [decide_setup(s, macro, desk.correlation_groups) for s in desk.setups]
+
+    # PATCH-FRESHNESS (round du 31/07/2026, audit B-2/F-04) : un document
+    # desk perime ne doit plus pouvoir produire des decisions setups sans
+    # marquage. Opt-in via now= pour preserver la purete/golden files.
+    if now is not None:
+        desk_dt = _desk_doc_datetime(desk)
+        if desk_dt is None:
+            logger.error(
+                "desk_document_datetime_unverifiable — fraicheur NON demontrable "
+                "(report_datetime=%r tz=%r)", desk.report_datetime, desk.report_timezone)
+        else:
+            age_h = (now - desk_dt).total_seconds() / 3600.0
+            if age_h > MAX_DESK_DOC_AGE_H:
+                logger.error(
+                    "desk_document_stale age_h=%.2f seuil=%.1f — %d setup(s) retrogrades BLOCKED_DATA",
+                    age_h, MAX_DESK_DOC_AGE_H, len(decisions))
+                decisions = [
+                    replace(
+                        d, state=DecisionState.BLOCKED_DATA,
+                        limiting_factor=(
+                            f"document desk perime (age {age_h:.1f}h > seuil "
+                            f"{MAX_DESK_DOC_AGE_H:.1f}h) — etat technique gele : "
+                            f"{d.limiting_factor}"),
+                    )
+                    for d in decisions
+                ]
+
     if include_rejects:
-        decisions.extend(decide_rejection(r, macro) for r in desk.rejected)
+        rej = [decide_rejection(r, macro) for r in desk.rejected]
+        # PATCH-CLUSTERDUP-XREF (round du 31/07/2026, audit C-12) : un
+        # doublon deduplique par le Desk reapparaissait en WATCH au meme
+        # niveau visuel que son representant, sans que le lecteur puisse
+        # voir que les deux coexistent. Advisory de contre-reference,
+        # sans changement d'etat (zero-regression golden files).
+        rep_states = {d.pair: d.state.value for d in decisions}
+        for i, r in enumerate(desk.rejected):
+            if r.reject_code != "CLUSTER_DUP":
+                continue
+            m = re.search(r"=\s*([A-Za-z0-9]+/[A-Za-z0-9]+)", r.detail or "")
+            if m and m.group(1) in rep_states:
+                rej[i] = replace(rej[i], advisories=rej[i].advisories + (
+                    f"representant {m.group(1)} present dans ce rapport en etat "
+                    f"{rep_states[m.group(1)]} — doublon maintenu deduplique, "
+                    f"ne pas le reintroduire manuellement au meme niveau de priorite",
+                ))
+        decisions.extend(rej)
     decisions_t = tuple(decisions)
     counts = Counter(d.state.value for d in decisions_t)
-    # PATCH-MACROCHANNEL (audit B-4) : le rapport Comité du 31/07/2026 a été
-    # produit avec `macro.priority_setups` vide sur 31/33 décisions sans que
-    # cela soit signalé nulle part -- ce comptage rend le fait observable
-    # dans les logs à l'échelle du run, en plus de la déclaration par
-    # décision individuelle (`Decision.macro_channel_empty`). Le renderer
-    # (hors périmètre de ce corpus) reste responsable de le faire apparaître
-    # dans le rapport final lui-même ; ce correctif ne peut garantir que la
-    # donnée est désormais disponible pour lui, pas qu'elle est affichée.
-    macro_empty_count = sum(1 for d in decisions_t if d.macro_channel_empty)
-    if macro_empty_count:
-        logger.warning(
-            "macro_channel_empty count=%d/%d — aucune thèse macro directionnelle "
-            "disponible pour ces décisions ce cycle (audit B-4/F-03) ; à faire "
-            "apparaître explicitement dans le rapport final, pas seulement "
-            "déduire d'un « advisories: aucun »",
-            macro_empty_count, len(decisions_t),
-        )
-    logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s "
-                "macro_channel_empty=%d/%d",
-                GRID_VERSION, len(decisions_t), dict(counts), include_rejects,
-                macro_empty_count, len(decisions_t))
+    logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s",
+                GRID_VERSION, len(decisions_t), dict(counts), include_rejects)
     return decisions_t
