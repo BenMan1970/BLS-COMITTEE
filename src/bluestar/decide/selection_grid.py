@@ -173,6 +173,13 @@ class Decision:
     grid_version: str = GRID_VERSION
     asset_class: AssetClass = AssetClass.FX_PAIR
     source_reject_code: str | None = None
+    # PATCH-MACROCHANNEL (round de validation zero-régression, 31/07/2026) --
+    # voir audit B-4 / F-03 / C-01 (rapport harnais round 3) : "Lorsque
+    # macro.priority_setups est vide, [...] le rapport final doit le dire."
+    # Champs additifs, défauts inertes -- aucun appelant existant qui
+    # construit un Decision sans ces deux arguments n'est affecté.
+    macro_channel_empty: bool = False
+    macro_channel_note: str = ""
 
 
 def _implied_macro_currency_bias(macro: MacroSnapshot) -> dict[str, list[tuple[Direction, str, int]]]:
@@ -501,17 +508,60 @@ def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) ->
     )
 
 
+def _macro_channel_state(macro: MacroSnapshot) -> tuple[bool, str]:
+    """PATCH-MACROCHANNEL (round de validation zero-régression, 31/07/2026)
+    -- voir audit B-4 / F-03 / C-01 : "Lorsque macro.priority_setups est
+    vide, ou lorsqu'une décision est prise sans aucune entrée macro, le
+    rapport final doit le dire." (cf. aussi F-03 : `decide_rejection` avait
+    un paramètre `macro` jamais lu dans son corps -- ce constat en fait
+    désormais un usage réel, sans changer aucun routage existant.)
+
+    Ne juge rien, ne bloque rien, ne change aucun `state` : constate
+    uniquement si le canal macro directionnel (`macro.priority_setups`)
+    était vide au moment de la décision. C'est la distinction que l'audit
+    reproche à l'absence de section dédiée dans le rapport final : « aucun
+    conflit macro » (vérifié positivement) et « aucune thèse macro
+    n'existait pour comparer » (silence structurel) ne sont pas le même
+    fait, et étaient indiscernables pour le lecteur avant ce correctif."""
+    if not macro.priority_setups:
+        return True, (
+            "canal macro vide (macro.priority_setups) : cette décision n'a "
+            "reçu aucune thèse directionnelle macro à comparer -- l'absence "
+            "d'advisory ou de conflit affichée ci-dessus signifie "
+            "'rien à comparer', pas 'validé par le macro'"
+        )
+    return False, ""
+
+
+def _augment_with_macro_channel_state(decision: Decision, macro: MacroSnapshot) -> Decision:
+    """Câble `_macro_channel_state()` sur la `Decision` finale.
+
+    Garanties de non-régression, identiques dans l'esprit à
+    `_augment_limiting_factor_with_flags` : ne touche jamais `state`,
+    `limiting_factor`, `advisories` ni aucun autre champ préexistant --
+    seuls les deux nouveaux champs `macro_channel_empty` /
+    `macro_channel_note` sont renseignés, et uniquement quand le canal est
+    effectivement vide (sinon `decision` est retournée strictement
+    inchangée)."""
+    empty, note = _macro_channel_state(macro)
+    if not empty:
+        return decision
+    return replace(decision, macro_channel_empty=True, macro_channel_note=note)
+
+
 def decide_setup(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
 ) -> Decision:
     """Point d'entrée public, comportement inchangé pour tout appelant
     existant (même signature, même import path) -- voir `_decide_setup_core`
-    pour la logique de décision elle-même et `_augment_limiting_factor_with_flags`
+    pour la logique de décision elle-même, `_augment_limiting_factor_with_flags`
     pour le correctif F6-BIS (câblage des flags Desk C1-C10 majeurs dans le
-    limiting_factor affiché au Comité)."""
+    limiting_factor affiché au Comité) et `_augment_with_macro_channel_state`
+    pour le correctif B-4/F-03 (déclaration explicite d'un canal macro vide)."""
     decision = _decide_setup_core(setup, macro, correlation_groups)
-    return _augment_limiting_factor_with_flags(decision, setup)
+    decision = _augment_limiting_factor_with_flags(decision, setup)
+    return _augment_with_macro_channel_state(decision, macro)
 
 
 _REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
@@ -595,7 +645,7 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
             "doublon n'est pas promu automatiquement en ELIGIBLE.",
         )
 
-    return Decision(
+    decision = Decision(
         pair=rejected.pair,
         direction=rejected.direction,
         state=state,
@@ -605,6 +655,12 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
         asset_class=asset_class,
         source_reject_code=rejected.reject_code,
     )
+    # PATCH-MACROCHANNEL : `macro` n'est plus un paramètre mort (cf. audit
+    # F-03/C-01) -- il sert désormais à déclarer si le canal macro était
+    # vide au moment de ce rejet, sans changer `state` ni aucun autre champ
+    # du routage ci-dessus (identique à `decide_setup`, cf.
+    # `_augment_with_macro_channel_state`).
+    return _augment_with_macro_channel_state(decision, macro)
 
 
 def decide_all(
@@ -622,6 +678,25 @@ def decide_all(
         decisions.extend(decide_rejection(r, macro) for r in desk.rejected)
     decisions_t = tuple(decisions)
     counts = Counter(d.state.value for d in decisions_t)
-    logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s",
-                GRID_VERSION, len(decisions_t), dict(counts), include_rejects)
+    # PATCH-MACROCHANNEL (audit B-4) : le rapport Comité du 31/07/2026 a été
+    # produit avec `macro.priority_setups` vide sur 31/33 décisions sans que
+    # cela soit signalé nulle part -- ce comptage rend le fait observable
+    # dans les logs à l'échelle du run, en plus de la déclaration par
+    # décision individuelle (`Decision.macro_channel_empty`). Le renderer
+    # (hors périmètre de ce corpus) reste responsable de le faire apparaître
+    # dans le rapport final lui-même ; ce correctif ne peut garantir que la
+    # donnée est désormais disponible pour lui, pas qu'elle est affichée.
+    macro_empty_count = sum(1 for d in decisions_t if d.macro_channel_empty)
+    if macro_empty_count:
+        logger.warning(
+            "macro_channel_empty count=%d/%d — aucune thèse macro directionnelle "
+            "disponible pour ces décisions ce cycle (audit B-4/F-03) ; à faire "
+            "apparaître explicitement dans le rapport final, pas seulement "
+            "déduire d'un « advisories: aucun »",
+            macro_empty_count, len(decisions_t),
+        )
+    logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s "
+                "macro_channel_empty=%d/%d",
+                GRID_VERSION, len(decisions_t), dict(counts), include_rejects,
+                macro_empty_count, len(decisions_t))
     return decisions_t
