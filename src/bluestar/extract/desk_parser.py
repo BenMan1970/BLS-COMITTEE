@@ -5,12 +5,53 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
+
 from bs4 import BeautifulSoup, Tag
 
 from bluestar.errors import DeskDocumentError
 from bluestar.models import CorrelationSignal, DeskRejectedSetup, DeskSetup, DeskSnapshot, Direction
 
 logger = logging.getLogger("bluestar.extract.desk")
+
+# PATCH-FRESHNESS (round du 31/07/2026, audit B-2/F-04) : seuil au-delà
+# duquel le document desk est considéré périmé. Aligné sur
+# bluestar.decide.MAX_DESK_DOC_AGE_H — déclaré ici pour que cli.py puisse
+# auditer AVANT de décider, sans importer la couche décision.
+MAX_DESK_DOC_AGE_H = 3.0  # NON CALIBRÉ — même commentaire que côté decide.
+
+# Décalages horaires nommés acceptés dans le bandeau desk. Le parser de date
+# (_parse_report_datetime) accepte déjà "GMT±N", "UTC", "CET" et "CEST" ; cette
+# table est la contrepartie numérique utilisée par l'audit de fraîcheur.
+_TZ_NAMED_OFFSETS = {"UTC": 0, "GMT": 0, "CET": 1, "CEST": 2}
+
+
+def audit_document_freshness(desk: DeskSnapshot, now: datetime | None = None) -> str | None:
+    """Retourne un message d'alerte si le document desk est périmé ou non
+    datable, None sinon. Destiné à cli.py : le message DOIT figurer dans le
+    rapport final (le Comité était la seule couche sans section d'intégrité).
+    Jamais d'exception : un doute sur la fraîcheur est un constat, pas un crash."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        dt_naive = datetime.strptime(desk.report_datetime, "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return ("date du document desk non vérifiable — fraîcheur NON démontrable, "
+                "à déclarer dans le rapport")
+    tzs = (desk.report_timezone or "").upper()
+    if tzs in _TZ_NAMED_OFFSETS:
+        desk_dt = dt_naive.replace(tzinfo=timezone(timedelta(hours=_TZ_NAMED_OFFSETS[tzs])))
+    elif tzs.startswith("GMT"):
+        try:
+            desk_dt = dt_naive.replace(tzinfo=timezone(timedelta(hours=int(tzs[3:]))))
+        except ValueError:
+            return f"fuseau du document desk non vérifiable ({tzs!r}) — fraîcheur NON démontrable"
+    else:
+        return f"fuseau du document desk non vérifiable ({tzs!r}) — fraîcheur NON démontrable"
+    age_h = (now - desk_dt).total_seconds() / 3600.0
+    if age_h > MAX_DESK_DOC_AGE_H:
+        return (f"document desk âgé de {age_h:.1f}h (> seuil {MAX_DESK_DOC_AGE_H:.1f}h) — "
+                f"prix et statuts calendaires potentiellement périmés")
+    return None
 
 
 def _safe_float(raw_text: str, *, field: str, pair: str) -> float:
@@ -273,6 +314,28 @@ def _extract_flags(block: Tag) -> tuple[dict, ...]:
     return tuple(out)
 
 
+def _extract_cal_status(block: Tag) -> tuple[str | None, str]:
+    """Statut calendaire par setup (PATCH-CALSTATUS, round du 31/07/2026,
+    audit F-05/C-04). Le Desk rend `<div class="cal-row"><span
+    class="cal-{status}">{STATUS}</span><span>{note}</span></div>` ; la ligne
+    « Horizon cible ≈ … » partage la classe conteneur `.cal-row` mais son
+    span n'a pas de classe cal-*, elle est donc ignorée sans ambiguïté.
+    Champ optionnel : un document ancien peut ne pas le porter."""
+    for row in block.find_all(class_="cal-row"):
+        span = row.find(class_=re.compile(r"^cal-"))
+        if span is None:
+            continue
+        status_cls = next((c for c in span.get("class", [])
+                           if c.startswith("cal-") and c != "cal-row"), None)
+        if not status_cls:
+            continue
+        status = status_cls[len("cal-"):].upper()
+        note = row.get_text(" ", strip=True)
+        note = note.replace(span.get_text(strip=True), "", 1).strip()
+        return status, note
+    return None, ""
+
+
 def _parse_setup(block: Tag) -> DeskSetup:
     """
     Orchestrateur pur : délègue chaque champ à une sous-fonction dédiée,
@@ -292,57 +355,48 @@ def _parse_setup(block: Tag) -> DeskSetup:
     quality, mtf, age_days = _extract_metrics(block)
     entry, stop_loss, rr = _extract_prices(block, pair)
     flags = _extract_flags(block)
+    cal_status, cal_note = _extract_cal_status(block)
 
-    # PATCH-DESKPARSE-F6 : bluestar.models.DeskSetup n'est PAS dans le
-    # corpus audité -- son schéma exact (accepte-t-il déjà un champ
-    # `flags` ?) est donc non démontrable ici, au même titre que les autres
-    # absences listées par l'audit (§11.2). Construction défensive : si le
-    # modèle réel accepte déjà `flags=`, il est peuplé immédiatement et
-    # devient consommable par comite_final_selection_grid.py ; sinon,
-    # échec sans régression (log + retour à la construction actuelle) au
-    # lieu de faire planter tout le pipeline d'extraction sur un champ
-    # inconnu. CE FALLBACK EST TEMPORAIRE : la correction définitive est
-    # l'ajout d'un champ `flags: tuple[FlagRef, ...] = ()` à DeskSetup dans
-    # models.py (hors périmètre de ce corpus) ; une fois ce champ ajouté,
-    # ce bloc peut être simplifié pour appeler DeskSetup(..., flags=flags)
-    # sans try/except.
+    # PATCH-DESKPARSE-B1 (round du 31/07/2026, audit B-1/C-02) : fin de la
+    # perte silencieuse. Si DeskSetup accepte les champs (modèle patché) :
+    # construction nominale, identique à l'intention du patch F6. Si le
+    # modèle les refuse ALORS QU'il y a des données à perdre (flags non
+    # vides ou cal_status présent) : DeskDocumentError — la perte d'un
+    # avertissement majeur de la couche technique ne doit JAMAIS être
+    # dégradée en warning de log (c'est exactement ce qui s'est produit,
+    # ou aurait pu se produire, sur EUR/CAD ce cycle). Si le modèle les
+    # refuse et qu'il n'y a RIEN à perdre : repli historique inchangé.
+    base_kwargs = dict(
+        pair=pair,
+        direction=direction,
+        conviction_grade=grade,
+        conviction_value=value,
+        cluster_tag=cluster,
+        quality=quality,
+        mtf_pct=mtf,
+        age_days=age_days,
+        risk_reward=rr,
+        factors=factors,
+        entry=entry,
+        stop_loss=stop_loss,
+    )
     try:
-        return DeskSetup(
-            pair=pair,
-            direction=direction,
-            conviction_grade=grade,
-            conviction_value=value,
-            cluster_tag=cluster,
-            quality=quality,
-            mtf_pct=mtf,
-            age_days=age_days,
-            risk_reward=rr,
-            factors=factors,
-            entry=entry,
-            stop_loss=stop_loss,
-            flags=flags,
-        )
-    except TypeError:
-        if flags:
-            logger.warning(
-                "desk_setup_flags_not_supported_by_model pair=%s flags_lost=%d "
-                "— models.py doit gagner un champ `flags` sur DeskSetup (cf. audit F6)",
-                pair, len(flags),
-            )
-        return DeskSetup(
-            pair=pair,
-            direction=direction,
-            conviction_grade=grade,
-            conviction_value=value,
-            cluster_tag=cluster,
-            quality=quality,
-            mtf_pct=mtf,
-            age_days=age_days,
-            risk_reward=rr,
-            factors=factors,
-            entry=entry,
-            stop_loss=stop_loss,
-        )
+        return DeskSetup(**base_kwargs, flags=flags,
+                         cal_status=cal_status, cal_note=cal_note)
+    except TypeError as exc:
+        if flags or cal_status:
+            raise DeskDocumentError(
+                f"Setup {pair!r} : {len(flags)} flag(s) et/ou cal_status={cal_status!r} "
+                f"extraits du document mais refusés par bluestar.models.DeskSetup "
+                f"({exc}) — appliquer le patch B-1 dans bluestar/models.py "
+                f"(champs `flags: tuple = ()`, `cal_status: str | None = None`, "
+                f"`cal_note: str = ''`) avant de relancer. Perte de données "
+                f"interdite (audit C-02)."
+            ) from exc
+        logger.info(
+            "desk_setup_old_schema — DeskSetup sans champs flags/cal_status ; "
+            "appliquer le patch B-1 dans bluestar/models.py pour les activer")
+        return DeskSetup(**base_kwargs)
 
 
 _JSON_DIRECTION_MAP = {"Bullish": Direction.LONG, "Bearish": Direction.SHORT}
