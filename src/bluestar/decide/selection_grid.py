@@ -22,7 +22,7 @@ import logging
 import types
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from bluestar.models import (
@@ -318,7 +318,7 @@ def _macro_priority_conflict(setup: DeskSetup, macro: MacroSnapshot) -> str | No
     return None
 
 
-def decide_setup(
+def _decide_setup_core(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
 ) -> Decision:
@@ -326,7 +326,16 @@ def decide_setup(
     Aucun effet de bord, aucun I/O — testable par golden files (cf. tests/).
 
     `correlation_groups` est optionnel (PATCH-CORRGROUPS, round du 28/07/2026) :
-    absent, la fonction se comporte exactement comme avant ce round."""
+    absent, la fonction se comporte exactement comme avant ce round.
+
+    PATCH-F6BIS (round du 31/07/2026) : ce corps de fonction est un
+    renommage pur de l'ancien `decide_setup` — AUCUNE ligne de logique
+    n'a été modifiée ici. Le nouveau `decide_setup` (plus bas) est un
+    wrapper fin qui appelle cette fonction telle quelle puis fait passer
+    son résultat dans `_augment_limiting_factor_with_flags`. Ce découpage
+    garantit une non-régression totale : tout golden file / test existant
+    qui appelait `decide_setup` sur un setup SANS flags majeurs obtient un
+    `Decision` strictement identique à avant ce patch."""
 
     advisories = currency_level_advisories(setup, macro) + technical_currency_advisories(
         setup, correlation_groups
@@ -433,6 +442,76 @@ def decide_setup(
         legs=leg_echoes, limiting_factor="aucune confluence macro positive sur les deux jambes",
         advisories=advisories,
     )
+
+
+def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) -> Decision:
+    """PATCH-F6BIS (audit round 2, GLM-5.2, 31/07/2026) : fait apparaître les
+    flags Desk de sévérité "major" (C1-C10, cf. `_extract_flags` côté
+    parser) dans le `limiting_factor` affiché au Comité, pour que celui-ci
+    reflète la vérité de la couche technique (cf. audit §10 : "la fonction
+    decide_setup doit inspecter setup.flags [...] écraser ou compléter le
+    limiting_factor").
+
+    Garanties de non-régression :
+    - `getattr(setup, "flags", ())` : si `DeskSetup` ne porte pas encore ce
+      champ (schéma exact non démontrable depuis ce corpus — cf. commentaire
+      dans `comite_final_desk_parser._parse_setup`), on obtient `()` et la
+      fonction retourne `decision` INCHANGÉE. Zéro comportement nouveau tant
+      que le champ n'existe pas réellement sur l'objet.
+    - Un setup sans flags, ou avec uniquement des flags "minor", ressort
+      avec un `Decision` strictement identique à avant ce patch (même
+      `limiting_factor`, même `state`) — seule l'apparition d'au moins un
+      flag "major" change la sortie, et uniquement le texte du
+      `limiting_factor` (jamais le `state`, qui reste sous la seule autorité
+      de `_decide_setup_core`, conformément à la demande de l'audit de
+      COMPLÉTER l'affichage plutôt que de changer la décision).
+    - Idempotent : si le texte du/des flag(s) majeur(s) figure déjà dans le
+      `limiting_factor` (ex: si une future version de `_decide_setup_core`
+      venait à les citer elle-même), rien n'est dupliqué.
+    """
+    flags = getattr(setup, "flags", ())
+    if not flags:
+        return decision
+
+    def _get(flag: object, key: str) -> str | None:
+        if isinstance(flag, dict):
+            return flag.get(key)
+        return getattr(flag, key, None)
+
+    major_parts: list[str] = []
+    for f in flags:
+        if _get(f, "severity") != "major":
+            continue
+        code = _get(f, "code")
+        detail = _get(f, "detail")
+        if not code:
+            continue
+        major_parts.append(f"{code} · {detail}" if detail else code)
+
+    if not major_parts:
+        return decision
+
+    flag_text = "; ".join(major_parts)
+    if flag_text in decision.limiting_factor:
+        return decision
+
+    return replace(
+        decision,
+        limiting_factor=f"{decision.limiting_factor} [flags desk majeurs : {flag_text}]",
+    )
+
+
+def decide_setup(
+    setup: DeskSetup, macro: MacroSnapshot,
+    correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
+) -> Decision:
+    """Point d'entrée public, comportement inchangé pour tout appelant
+    existant (même signature, même import path) -- voir `_decide_setup_core`
+    pour la logique de décision elle-même et `_augment_limiting_factor_with_flags`
+    pour le correctif F6-BIS (câblage des flags Desk C1-C10 majeurs dans le
+    limiting_factor affiché au Comité)."""
+    decision = _decide_setup_core(setup, macro, correlation_groups)
+    return _augment_limiting_factor_with_flags(decision, setup)
 
 
 _REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
@@ -546,4 +625,3 @@ def decide_all(
     logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s",
                 GRID_VERSION, len(decisions_t), dict(counts), include_rejects)
     return decisions_t
-  
