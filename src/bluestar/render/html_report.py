@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from bluestar.decide.selection_grid import AssetClass, Decision, DecisionState, LegVerdict
 from bluestar.errors import RenderError
+from bluestar.extract.desk_parser import audit_document_freshness
 from bluestar.models import DeskSnapshot, MacroSnapshot
 
 logger = logging.getLogger("bluestar.render")
@@ -143,6 +144,9 @@ body{margin:0;background:var(--bg);font-family:var(--font-sans);color:var(--roya
 .page-subbar{display:flex;gap:18px;flex-wrap:wrap;padding:9px 0;font-family:var(--font-mono);
   font-size:10px;color:var(--slate);border-bottom:1px solid var(--border);margin-bottom:20px}
 .page-subbar .confidential{color:var(--red);font-weight:700;letter-spacing:.4px}
+.freshness-warn{background:var(--blocked-soft);color:var(--blocked);padding:10px 14px;
+  border-radius:8px;border:1px solid var(--red-soft);font-size:11px;font-weight:700;
+  margin-bottom:16px;font-family:var(--font-mono)}
 .meta-dates{font-family:var(--font-mono);font-size:10px;color:var(--slate);
   background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;line-height:1.8}
 .meta-dates b{color:var(--royal-dark)}
@@ -205,6 +209,13 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
 
     generated_at = generated_at or datetime.now(timezone.utc)
 
+    # PATCH-B2/F04 (audit 31/07/2026) : calcule l'alerte de fraîcheur documentaire
+    # pour l'afficher dans le rapport final, garantissant la transparence.
+    freshness_msg = audit_document_freshness(desk, generated_at)
+    freshness_html = ""
+    if freshness_msg:
+        freshness_html = f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR : {_esc(freshness_msg)}</div>'
+
     ordered = sorted(decisions, key=lambda d: _STATE_ORDER[d.state])
 
     counts = {s: 0 for s in DecisionState}
@@ -258,10 +269,11 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     <span class="confidential">● CONFIDENTIEL</span>
   </div>
 
+  {freshness_html}
+
   <div class="meta-dates">
     Régime macro : <b>{_esc(macro.regime)}</b> (confiance {_esc(macro.regime_confidence_pct)}%) ·
-    Univers desk : <b>{desk.universe_evaluated}/{desk.universe_total}</b>,
-    {len(desk.setups)} setups validés, {len(desk.rejected)} rejetés ·
+    Univers desk : <b>{desk.universe_total}</b> actifs · <b>{desk.universe_evaluated}</b> franchissent les gates · <b>{len(desk.setups)}</b> validés · <b>{len(desk.rejected)}</b> rejetés ·
     Décisions comité : <b>{len(ordered)}/{desk.universe_total}</b> ·
     Grille de décision : <b>{_esc(grid_version)}</b>
   </div>
