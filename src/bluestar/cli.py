@@ -55,7 +55,7 @@ from pathlib import Path
 from bluestar import __version__
 from bluestar.decide.selection_grid import decide_all
 from bluestar.errors import DeskDocumentError, MacroDocumentError, RenderError
-from bluestar.extract.desk_parser import parse_desk
+from bluestar.extract.desk_parser import parse_desk, audit_document_freshness
 from bluestar.extract.macro_parser import parse_macro
 from bluestar.render.html_report import render_report
 
@@ -149,10 +149,39 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("Aucun setup validé dans le document desk — rapport non généré.")
             return 7
 
-        decisions = decide_all(desk, macro)
+        # PATCH-B2/B4/F18 (audit 31/07/2026) : Activation des gardes-fous de 
+        # transmission et de fraîcheur documentaire.
+        now = datetime.now(timezone.utc)
+        
+        # B-2 / F-04 : Audit de fraîcheur du document desk
+        freshness_msg = audit_document_freshness(desk, now)
+        if freshness_msg:
+            logger.warning("ALERTE FRAÎCHEUR DOCUMENTAIRE : %s", freshness_msg)
+            
+        # B-4 : Déclaration du canal macro vide
+        if not macro.priority_setups:
+            macro_channel_status = ("INERTE — aucun setup prioritaire macro ce cycle : le garde-fou de "
+                "conflit et les advisories currency-level étaient structurellement désactivés. "
+                "« Advisories : aucun » signifie absence de thèse macro, pas absence de conflit.")
+            logger.warning("MACRO_CHANNEL_STATUS : %s", macro_channel_status)
+        else:
+            macro_channel_status = "ACTIF"
+
+        # Passage explicite de l'horloge (now) à decide_all pour activer la 
+        # rétrogradation BLOCKED_DATA en cas de péremption > 3h.
+        decisions = decide_all(desk, macro, now=now)
+
+        # F-18 : Log des cardinalités pour lever l'ambiguïté (5 + 31 = 33)
+        logger.info(
+            "Univers desk : %d actifs · %d franchissent les gates · %d validés · %d rejetés",
+            desk.universe_total,
+            desk.universe_evaluated,
+            len(desk.setups),
+            len(desk.rejected)
+        )
 
         try:
-            report_html = render_report(desk, macro, decisions, generated_at=datetime.now(timezone.utc))
+            report_html = render_report(desk, macro, decisions, generated_at=now)
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(report_html, encoding="utf-8")
         except RenderError as exc:
