@@ -1,5 +1,4 @@
-"""
-Schéma de données typé pour Bluestar v2.
+"""Schéma de données typé pour Bluestar v2.
 
 Principe architectural (Partie 4.2 de la spécification) : le HTML n'est jamais
 une source de vérité. Ces dataclasses SONT la source de vérité à partir du moment
@@ -110,6 +109,16 @@ class MacroSnapshot:
 
 
 @dataclass(frozen=True)
+class FlagRef:
+    """Flag de contradiction (C1-C10) émis par le moteur Desk.
+    PATCH-B1 (audit B-1/C-02, round 31/07/2026) : structuration des flags
+    pour rétablir le canal Desk → Comité."""
+    code: str
+    severity: str          # "minor" | "major"
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class DeskSetup:
     """Un setup validé par le desk technique (un bloc .setup du rapport)."""
     pair: str
@@ -124,6 +133,12 @@ class DeskSetup:
     factors: Mapping[str, float]        # F1 HWA, F2 RMG, ... F7 MAC, Q-rang
     entry: float | None
     stop_loss: float | None
+    # PATCH-B1 (audit B-1/C-02, round 31/07/2026) : fin de la perte silencieuse
+    # des flags et statuts calendaires. Défauts assurant une zero-régression
+    # si le parser ne fournit pas ces champs (viellles versions de HTML).
+    flags: tuple = ()                   # tuple[FlagRef|dict, ...] — dicts acceptés (parser émet des dicts)
+    cal_status: str | None = None       # "OK"|"PROXIMITY"|"WATCH"|"BLACKOUT"
+    cal_note: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "factors", types.MappingProxyType(dict(self.factors)))
