@@ -201,9 +201,26 @@ tr:nth-child(even) td{background:#FAFBFF}
 
 
 def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Decision, ...],
-                   generated_at: datetime | None = None) -> str:
+                   generated_at: datetime | None = None,
+                   macro_channel_status: str | None = None,
+                   macro_freshness_msg: str | None = None,
+                   desk_banners: tuple[str, ...] = ()) -> str:
     """Génère le rapport HTML complet. Fonction quasi pure : seule dépendance
-    externe est l'horodatage de génération (injectable pour les tests)."""
+    externe est l'horodatage de génération (injectable pour les tests).
+    
+    macro_channel_status: déclaration du statut du canal macro (G1/B-4).
+    Si None, déduit de macro.priority_setups.
+
+    macro_freshness_msg: message d'alerte de fraîcheur du document MACRO
+    (O-8/R-10, audit 02/08/2026) — symétrique de l'audit de fraîcheur desk
+    déjà en place ci-dessous. None (défaut) préserve le comportement
+    précédent pour tout appelant qui ne le calcule pas encore.
+
+    desk_banners: bannières document-niveau du desk (ex. couverture
+    calendrier tronquée, fuseau incohérent — K-3/R-3/G4, audit 02/08/2026),
+    extraites par `bluestar.extract.desk_parser`. Tuple vide (défaut) :
+    rendu strictement identique à avant ce paramètre.
+    """
     if not decisions:
         raise RenderError("Aucune décision à rendre — decisions est vide.")
 
@@ -214,7 +231,20 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     freshness_msg = audit_document_freshness(desk, generated_at)
     freshness_html = ""
     if freshness_msg:
-        freshness_html = f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR : {_esc(freshness_msg)}</div>'
+        freshness_html = f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR DESK : {_esc(freshness_msg)}</div>'
+    # O-8/R-10 FIX : la couche Macro n'avait aucun audit de fraîcheur
+    # symétrique — seul le desk en avait un. Même gabarit visuel, message
+    # distinct pour ne jamais confondre les deux couches périmées.
+    if macro_freshness_msg:
+        freshness_html += f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR MACRO : {_esc(macro_freshness_msg)}</div>'
+    # K-3/R-3/G4 FIX : les bannières document-niveau du desk (fuseau
+    # incohérent, couverture calendrier tronquée) existaient dans le HTML
+    # source mais n'atteignaient jamais le rapport du Comité.
+    banners_html = "".join(
+        f'<div class="freshness-warn">⚠️ ALERTE DESK (bannière document) : {_esc(b)}</div>'
+        for b in desk_banners
+    )
+    freshness_html += banners_html
 
     ordered = sorted(decisions, key=lambda d: _STATE_ORDER[d.state])
 
@@ -267,6 +297,7 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     <span>📅 Doc macro : {_esc(macro.report_datetime)} {_esc(macro.report_timezone)}</span>
     <span>📄 Doc desk : {_esc(desk.report_datetime)} {_esc(desk.report_timezone)}</span>
     <span class="confidential">● CONFIDENTIEL</span>
+    <span style="color:var(--amber);margin-left:auto">🔧 Macro : {_esc(macro_channel_status or "ACTIF")}</span>
   </div>
 
   {freshness_html}
@@ -285,6 +316,28 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     <div class="kpi low"><div class="lbl">BLOCKED</div><div class="val">{counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK]}</div><div class="hint">{_esc(blocked_pairs)}</div></div>
     <div class="kpi low"><div class="lbl">REJECT</div><div class="val">{counts[DecisionState.REJECT]}</div><div class="hint">rejets desk + jambe unique</div></div>
     <div class="kpi royal"><div class="lbl">Advisories</div><div class="val">{total_advisories}</div><div class="hint">signaux non bloquants</div></div>
+  </div>
+
+  <!-- Intégrité des décisions — transmission des informations critiques -->
+  <div class="section" style="font-size:11px;margin-top:20px;border-top:2px solid var(--royal-dark);padding-top:12px">
+    <div class="sec-hdr" style="padding-bottom:6px;border-bottom:1px solid var(--border)">
+      <div class="sec-ttl">Intégrité & Transmission</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="abox wait" style="font-size:12px">
+        <div style="margin-bottom:4px;font-weight:700;color:var(--royal-dark)">Canal Macro</div>
+        <div style="font-family:var(--mono)">Statut : {_esc(macro_channel_status or "ACTIF")} — 
+          {_esc("aucun setup prioritaire macro" if not macro.priority_setups else "priorités calculées")}</div>
+        <div style="font-family:var(--mono);margin-top:2px">Confusion : {_esc(f"confiance {macro.regime_confidence_pct}%" if macro.regime_confidence_pct else "N/A")}</div>
+        <div style="font-family:var(--mono);margin-top:2px">Fraîcheur macro : {_esc(macro_freshness_msg or "dans le seuil ou non évaluée")}</div>
+      </div>
+      <div class="abox wait" style="font-size:12px">
+        <div style="margin-bottom:4px;font-weight:700;color:var(--royal-dark)">Transmission</div>
+        <div style="font-family:var(--mono)">Décisions : {len(ordered)}/{desk.universe_total} — 
+          {_esc("invariant vérifié" if len(ordered) == desk.universe_total else "INCIDENT")}</div>
+        <div style="font-family:var(--mono);margin-top:2px">Macro channel : {_esc(macro_channel_status or "non déclaré")}</div>
+      </div>
+    </div>
   </div>
 
   <table>
@@ -313,3 +366,4 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
                 counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK],
                 total_advisories)
     return html_out
+
