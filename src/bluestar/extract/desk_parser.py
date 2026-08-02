@@ -128,6 +128,21 @@ def _parse_themes(soup: BeautifulSoup) -> tuple[str, ...]:
     return ()
 
 
+def _parse_banners(soup: BeautifulSoup) -> tuple[str, ...]:
+    """K-3/R-3/G4 FIX (round de validation zero-régression, 02/08/2026).
+
+    Le moteur Desk (ENGINE_V9.py) émet un `<div class="banner">` par alerte
+    document-niveau -- ALERTE FUSEAU (incohérence calendaire intraday) et
+    COUVERTURE CALENDRIER TRONQUÉE (flux hebdomadaire raccourci, cf.
+    `cal_feed_truncated`/`cal_time_degraded` du template Desk). Ces
+    bannières existent bel et bien dans le HTML produit, mais aucune
+    fonction du parser Comité ne les extrayait avant ce correctif : leur
+    contenu n'atteignait jamais le rapport final (audit K-3/R-3/O-2).
+    Champ optionnel : un cycle sans alerte n'a légitimement aucun `.banner`,
+    et le résultat est alors un tuple vide, comme avant ce correctif."""
+    return tuple(b.get_text(" ", strip=True) for b in soup.find_all(class_="banner"))
+
+
 _FACTOR_LABEL_RE = re.compile(r"^(F\d|Q-rang)")
 
 
@@ -287,6 +302,32 @@ def _extract_prices(block: Tag, pair: str) -> tuple[float | None, float | None, 
     return entry, stop_loss, rr
 
 
+def _extract_entry_type(block: Tag) -> str | None:
+    """X-9 FIX (round de validation zero-régression, 02/08/2026).
+
+    Le moteur Desk rend `<div class="px-card entry">...<div class="px-sub">
+    {{s.entry_type}}</div></div>` -- "Market" ou "Limit" -- mais aucune
+    fonction du parser Comité ne le lisait avant ce correctif. C'est
+    l'information nécessaire pour qualifier un ELIGIBLE dont l'entrée est
+    "Market" alors que le marché FX est fermé au moment de la génération
+    (cf. audit X-9 : "aucune notion d'ouverture de marché" ; le Comité a
+    désormais la donnée pour construire l'advisory correspondante dans
+    `bluestar.decide.selection_grid`).
+
+    Champ optionnel : retourne None si la structure est absente (ancien
+    document, ou actif sans bloc .entry), jamais une erreur -- ce champ ne
+    conditionne aucune décision par lui-même, il n'alimente qu'une advisory
+    non bloquante."""
+    px_grid = block.find(class_="px-grid")
+    if not px_grid:
+        return None
+    entry_card = px_grid.find(class_="entry")
+    if not entry_card:
+        return None
+    sub = entry_card.find(class_="px-sub")
+    return sub.get_text(strip=True) if sub else None
+
+
 def _extract_flags(block: Tag) -> tuple[dict, ...]:
     """Flags de contradiction (C1-C10) affichés sous un setup validé.
 
@@ -354,6 +395,7 @@ def _parse_setup(block: Tag) -> DeskSetup:
     factors = _extract_factors(block)
     quality, mtf, age_days = _extract_metrics(block)
     entry, stop_loss, rr = _extract_prices(block, pair)
+    entry_type = _extract_entry_type(block)
     flags = _extract_flags(block)
     cal_status, cal_note = _extract_cal_status(block)
 
@@ -380,9 +422,31 @@ def _parse_setup(block: Tag) -> DeskSetup:
         entry=entry,
         stop_loss=stop_loss,
     )
+    # X-9 FIX (round de validation zero-régression, 02/08/2026) : tentative
+    # en 3 paliers. Palier 1 (schéma complet, entry_type inclus) ; si
+    # bluestar.models.DeskSetup n'a pas encore ce champ, palier 2 (schéma
+    # B-1 historique, sans entry_type — dégradation TOLÉRÉE et journalisée,
+    # car entry_type n'est pas un flag de sécurité critique comme
+    # flags/cal_status : sa seule consommation est une advisory non
+    # bloquante "marché fermé", jamais un état) ; palier 3 (repli B-1
+    # historique) reprend EXACTEMENT la même règle stricte qu'avant ce
+    # correctif pour flags/cal_status — aucun changement de comportement
+    # sur ce point.
     try:
-        return DeskSetup(**base_kwargs, flags=flags,
-                         cal_status=cal_status, cal_note=cal_note)
+        return DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status,
+                         cal_note=cal_note, entry_type=entry_type)
+    except TypeError:
+        pass
+    try:
+        setup = DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status, cal_note=cal_note)
+        if entry_type is not None:
+            logger.info(
+                "desk_entry_type_extracted_but_unsupported pair=%s entry_type=%r — "
+                "bluestar.models.DeskSetup n'a pas (encore) le champ `entry_type` "
+                "(audit X-9) ; advisory 'marché fermé' indisponible pour ce setup.",
+                pair, entry_type,
+            )
+        return setup
     except TypeError as exc:
         if flags or cal_status:
             raise DeskDocumentError(
@@ -469,9 +533,21 @@ def _extract_reject_direction(container: Tag, pair: str) -> Direction | None:
     if is_short and not is_long:
         return Direction.SHORT
     if classes:
-        logger.warning(
-            "desk_reject_direction_unrecognized pair=%s classes=%r", pair, classes,
-        )
+        # R-19 FIX (round de validation zero-régression, 02/08/2026, MINEUR) :
+        # "neutral" est une classe légitime et documentée du template Desk
+        # (`<span class="dir neutral">Neutral</span>`, ex. DE30/EUR), pas une
+        # anomalie -- elle se répétait pourtant à chaque cycle au même niveau
+        # de sévérité qu'une classe réellement inattendue, noyant les vrais
+        # avertissements (audit indépendant, rapport RUN-4, R-19). Seule une
+        # classe hors de {"long", "short", "neutral"} reste un warning ; le
+        # cas "neutral" légitime passe en debug (toujours traçable, jamais
+        # bruyant par défaut). Retour inchangé (`None`) dans les deux cas.
+        if "neutral" in classes:
+            logger.debug("desk_reject_direction_neutral pair=%s (classe légitime)", pair)
+        else:
+            logger.warning(
+                "desk_reject_direction_unrecognized pair=%s classes=%r", pair, classes,
+            )
     return None
 
 
@@ -557,6 +633,7 @@ def parse_desk(html: str) -> DeskSnapshot:
     setups = tuple(_parse_setup(block) for block in soup.find_all(class_="setup"))
     rejected = _parse_rejected(soup)
     correlation_groups = _parse_correlation_groups(soup)
+    banners = _parse_banners(soup)
 
     if len(setups) + len(rejected) != universe_total:
         logger.warning(
@@ -565,7 +642,7 @@ def parse_desk(html: str) -> DeskSnapshot:
             universe_total, len(setups), len(rejected), len(setups) + len(rejected),
         )
 
-    result = DeskSnapshot(
+    base_kwargs = dict(
         report_datetime=report_dt,
         report_timezone=report_tz,
         universe_evaluated=universe_evaluated,
@@ -576,6 +653,24 @@ def parse_desk(html: str) -> DeskSnapshot:
         rejected=rejected,
         correlation_groups=correlation_groups,
     )
+    # K-3/R-3/G4 FIX : même garantie anti-perte-silencieuse que le patch B-1
+    # (flags/cal_status sur DeskSetup, cf. _parse_setup ci-dessus). Si
+    # bluestar.models.DeskSnapshot ne porte pas encore `banners`, on retombe
+    # sur la construction historique plutôt que de lever une exception —
+    # mais on NE PERD PAS l'alerte en silence : elle est loguée en warning
+    # explicite pour que l'absence de couverture du modèle soit visible.
+    try:
+        result = DeskSnapshot(**base_kwargs, banners=banners)
+    except TypeError as exc:
+        if banners:
+            logger.warning(
+                "desk_banners_extracted_but_unsupported count=%d bannieres=%r — "
+                "appliquer le patch (champ `banners: tuple[str, ...] = ()`) dans "
+                "bluestar/models.py::DeskSnapshot pour ne pas perdre ces alertes "
+                "document-niveau (%s)",
+                len(banners), banners, exc,
+            )
+        result = DeskSnapshot(**base_kwargs)
     logger.info(
         "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
         result.report_datetime, result.universe_evaluated, result.universe_total,
