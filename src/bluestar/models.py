@@ -32,23 +32,6 @@ class IPSZone(str, Enum):
     CROWDED = "crowded"
 
 
-# ---------------------------------------------------------------------------
-# SEUILS IPS — SOURCE UNIQUE DE VÉRITÉ.
-#
-# Défaut corrigé (round d'audit du 19/07/2026, trouvé indépendamment par
-# l'audit GPT-5.5, manqué par Claude 4.8 et Kimi K2) : ces seuils étaient
-# auparavant DUPLIQUÉS — une copie déclarée dans decide/selection_grid.py
-# sous les mêmes noms (IPS_CAPITULATION_MAX, IPS_CROWDED_MIN), présentée
-# comme "registre gelé", mais jamais lue par ips_zone() ci-dessous, qui
-# utilisait ses propres littéraux 20/80 codés en dur. Modifier la copie de
-# selection_grid.py n'avait donc AUCUN effet sur la décision réelle.
-#
-# Ces deux constantes sont maintenant définies UNE seule fois, ici — le seul
-# endroit où la logique de zonage IPS s'exécute réellement — et
-# decide/selection_grid.py les importe plutôt que de les redéclarer.
-# Toute autre duplication future doit être considérée comme un bug, pas une
-# clarification.
-# ---------------------------------------------------------------------------
 IPS_CAPITULATION_MAX = 20.0
 IPS_CROWDED_MIN = 80.0
 
@@ -65,11 +48,10 @@ def ips_zone(value: float | None) -> IPSZone | None:
 
 @dataclass(frozen=True)
 class CurrencyMacroData:
-    """Une devise vue par le briefing macro : force relative + positionnement."""
     code: str
-    strength_rank: int | None          # position dans le classement (1 = plus fort)
-    strength_score: float | None       # score 0-100
-    ips: float | None                  # Institutional Positioning Score 0-100
+    strength_rank: int | None
+    strength_score: float | None
+    ips: float | None
     ips_source: str | None
     ips_date: str | None
 
@@ -80,7 +62,6 @@ class CurrencyMacroData:
 
 @dataclass(frozen=True)
 class MacroPrioritySetup:
-    """Un setup mis en avant explicitement par le briefing macro (fiche actif)."""
     pair: str
     direction: Direction
     conviction_stars: int
@@ -89,32 +70,22 @@ class MacroPrioritySetup:
 
 @dataclass(frozen=True)
 class MacroSnapshot:
-    """État complet du briefing macro à un instant donné (point-in-time)."""
     report_datetime: str
     report_timezone: str
     regime: str
     regime_confidence_pct: float | None
     currencies: Mapping[str, CurrencyMacroData]
     priority_setups: tuple[MacroPrioritySetup, ...]
-    extreme_currency_count: int | None  # comptage annoncé par le doc, pour cross-check
+    extreme_currency_count: int | None
 
     def __post_init__(self) -> None:
-        # frozen=True empêche `self.currencies = x` (réassignation), mais PAS
-        # `self.currencies["EUR"] = x` si currencies est un dict ordinaire
-        # (mutation du contenu, pas de l'attribut) — vérifié par exécution
-        # lors du round d'audit du 19/07/2026 (trouvé par l'audit GPT-5.5).
-        # MappingProxyType ferme ce trou : toute écriture sur le mapping lève
-        # TypeError, y compris après construction.
         object.__setattr__(self, "currencies", types.MappingProxyType(dict(self.currencies)))
 
 
 @dataclass(frozen=True)
 class FlagRef:
-    """Flag de contradiction (C1-C10) émis par le moteur Desk.
-    PATCH-B1 (audit B-1/C-02, round 31/07/2026) : structuration des flags
-    pour rétablir le canal Desk → Comité."""
     code: str
-    severity: str          # "minor" | "major"
+    severity: str
     detail: str = ""
 
 
@@ -123,34 +94,34 @@ class DeskSetup:
     """Un setup validé par le desk technique (un bloc .setup du rapport)."""
     pair: str
     direction: Direction
-    conviction_grade: str               # ex: "BBB" — échelle propre au desk
-    conviction_value: float             # ex: 0.77
+    conviction_grade: str
+    conviction_value: float
     cluster_tag: str
-    quality: str | None                 # ex: "A+"
+    quality: str | None
     mtf_pct: float | None
     age_days: int | None
     risk_reward: float | None
-    factors: Mapping[str, float]        # F1 HWA, F2 RMG, ... F7 MAC, Q-rang
+    factors: Mapping[str, float]
     entry: float | None
     stop_loss: float | None
-    # PATCH-B1 (audit B-1/C-02, round 31/07/2026) : fin de la perte silencieuse
-    # des flags et statuts calendaires. Défauts assurant une zero-régression
-    # si le parser ne fournit pas ces champs (viellles versions de HTML).
-    flags: tuple = ()                   # tuple[FlagRef|dict, ...] — dicts acceptés (parser émet des dicts)
-    cal_status: str | None = None       # "OK"|"PROXIMITY"|"WATCH"|"BLACKOUT"
+    flags: tuple = ()
+    cal_status: str | None = None
     cal_note: str = ""
+    # X-9/G6 FIX (round de validation zero-régression, 02/08/2026) : type
+    # d'entrée calculé par le Desk ("Market" ou "Limit"), jusqu'ici jamais
+    # transmis au Comité alors qu'il est rendu dans le HTML source
+    # (`.entry .px-sub`). Nécessaire pour qualifier une entrée "Market"
+    # générée marché FX fermé (gate G6) et, plus généralement, pour toute
+    # logique qui doit distinguer un prix d'entrée "au marché" d'un niveau
+    # de zone S/R. Défaut `None` : zéro régression pour tout document desk
+    # antérieur à ce correctif (le parser ne l'extrait pas, ou une version
+    # de bluestar.extract.desk_parser antérieure à ce correctif).
+    entry_type: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "factors", types.MappingProxyType(dict(self.factors)))
 
     def leg_currencies(self) -> tuple[str, str] | None:
-        """Décompose une paire FX en (devise_longue, devise_courte).
-        Retourne None si l'instrument n'est pas une paire à deux devises
-        FX reconnues. Un code devise valide = exactement 3 lettres (ISO 4217-like).
-        'US30' (4 caractères, contient un chiffre) échoue ce test et retourne
-        donc None : c'est un indice actions, pas une paire FX, même si son
-        symbole contient un '/'. C'est précisément le garde-fou que le comité
-        d'audit a identifié comme manquant (mode 'jambe unique' requis)."""
         if "/" not in self.pair:
             return None
         base, quote = self.pair.split("/")
@@ -171,11 +142,6 @@ class DeskRejectedSetup:
 
 @dataclass(frozen=True)
 class CorrelationSignal:
-    """Un signal technique (CHoCH etc.) associé à une devise, tel que
-    calculé en amont par le moteur (merged_pipeline.json::correlation_groups)
-    et transporté jusqu'au HTML desk depuis le round du 27/07/2026.
-    Purement informatif — jamais utilisé pour changer un état de décision,
-    même contrat que les autres advisories."""
     symbol: str
     direction: Direction | None
     kind: str
@@ -196,10 +162,14 @@ class DeskSnapshot:
     themes: tuple[str, ...]
     setups: tuple[DeskSetup, ...]
     rejected: tuple[DeskRejectedSetup, ...]
-    # PATCH-CORRGROUPS (round du 28/07/2026) : dict devise -> signaux
-    # techniques réels (pas une thèse macro déduite). Vide par défaut pour
-    # tout document desk antérieur au correctif moteur qui l'embarque.
     correlation_groups: dict[str, tuple[CorrelationSignal, ...]] = field(default_factory=dict)
+    # K-3/R-3/G4 FIX (round de validation zero-régression, 02/08/2026) :
+    # bannières document-niveau du Desk (fuseau incohérent, couverture
+    # calendrier tronquée — `<div class="banner">` dans le HTML source),
+    # jusqu'ici jamais transmises au Comité alors qu'elles existent bel et
+    # bien dans le document. Défaut `()` : zéro régression pour tout
+    # document desk antérieur à ce correctif.
+    banners: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
