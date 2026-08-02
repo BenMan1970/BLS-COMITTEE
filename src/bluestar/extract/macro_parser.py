@@ -18,6 +18,8 @@ sections change.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+
 from bs4 import BeautifulSoup, Tag
 
 from bluestar.errors import MacroDocumentError
@@ -32,6 +34,50 @@ from bluestar.models import (
 import logging
 
 logger = logging.getLogger("bluestar.extract.macro")
+
+
+# O-8/R-10 FIX (round de validation zero-régression, 02/08/2026) : le Desk
+# possédait déjà `audit_document_freshness` (bluestar.extract.desk_parser) ;
+# le Macro n'avait AUCUN équivalent -- asymétrie confirmée par l'audit
+# indépendant (O-8/R-10 : "aucun audit de fraîcheur macro"). Seuil aligné sur
+# bluestar.decide.MAX_DESK_DOC_AGE_H / desk_parser.MAX_DESK_DOC_AGE_H (même
+# statut de calibration honnête : NON CALIBRÉ, valeur provisoire).
+#
+# Format de date DÉLIBÉRÉMENT distinct de celui du desk : le Macro rend
+# "JJ/MM/AAAA HH:MM" (cf. _parse_report_datetime ci-dessous) là où le Desk
+# rend "%Y-%m-%d %H:%M" -- l'ajout de cette garde n'est donc pas un
+# copier-coller du parseur desk, comme relevé par l'audit (R-10, "aggravant
+# relevé").
+MAX_MACRO_DOC_AGE_H = 3.0  # NON CALIBRÉ — même statut que MAX_DESK_DOC_AGE_H
+_MACRO_TZ_NAMED_OFFSETS = {"UTC": 0, "GMT": 0, "CET": 1, "CEST": 2}
+_MACRO_TZ_OFFSET_RE = re.compile(r"^GMT([+-])(\d+)$")
+
+
+def audit_macro_document_freshness(macro: "MacroSnapshot", now: datetime | None = None) -> str | None:
+    """Retourne un message d'alerte si le document macro est périmé ou non
+    datable, None sinon. Jamais d'exception : un doute sur la fraîcheur est
+    un constat, pas un crash — même contrat que
+    `bluestar.extract.desk_parser.audit_document_freshness`."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        dt_naive = datetime.strptime(macro.report_datetime, "%d/%m/%Y %H:%M")
+    except (ValueError, TypeError):
+        return ("date du document macro non vérifiable — fraîcheur NON démontrable, "
+                "à déclarer dans le rapport")
+    tzs = (macro.report_timezone or "").upper()
+    if tzs in _MACRO_TZ_NAMED_OFFSETS:
+        macro_dt = dt_naive.replace(tzinfo=timezone(timedelta(hours=_MACRO_TZ_NAMED_OFFSETS[tzs])))
+    else:
+        m = _MACRO_TZ_OFFSET_RE.match(tzs)
+        if not m:
+            return f"fuseau du document macro non vérifiable ({tzs!r}) — fraîcheur NON démontrable"
+        sign = 1 if m.group(1) == "+" else -1
+        macro_dt = dt_naive.replace(tzinfo=timezone(sign * timedelta(hours=int(m.group(2)))))
+    age_h = (now - macro_dt).total_seconds() / 3600.0
+    if age_h > MAX_MACRO_DOC_AGE_H:
+        return (f"document macro âgé de {age_h:.1f}h (> seuil {MAX_MACRO_DOC_AGE_H:.1f}h) — "
+                f"régime, IPS et priorités potentiellement périmés")
+    return None
 
 
 def _find_section_by_subtitle(soup: BeautifulSoup, subtitle_substring: str) -> Tag:
@@ -86,10 +132,17 @@ def _parse_ips(soup: BeautifulSoup) -> dict[str, tuple[float | None, str]]:
     if container is None:
         raise MacroDocumentError("Conteneur IPS introuvable après l'ancre.")
 
-    # Date source : cherchée dans le texte brut autour du bloc (ex. "Vendredi 10 juillet 2026")
-    date_match = re.search(r"(Vendredi|Lundi|Mardi|Mercredi|Jeudi|Samedi|Dimanche)\s+\d{1,2}\s+\w+\s+\d{4}",
-                            anchor.parent.get_text() if anchor.parent else "")
-    source_date = date_match.group(0) if date_match else "non disponible dans les documents fournis"
+    # V4-22 FIX : chercher la date dans les spans frères (même pattern que
+    # _parse_themes dans desk_parser.py) plutôt que dans le texte brut du parent.
+    # Cela rend la capture robuste aux badges ajoutés entre l'ancre et la date.
+    source_date = "non disponible dans les documents fournis"
+    for span in container.find_all("span", recursive=False):
+        span_text = span.get_text(" ", strip=True)
+        date_match = re.search(r"(Vendredi|Lundi|Mardi|Mercredi|Jeudi|Samedi|Dimanche)\s+\d{1,2}\s+\w+\s+\d{4}",
+                               span_text)
+        if date_match:
+            source_date = date_match.group(0)
+            break
 
     result: dict[str, tuple[float | None, str]] = {}
     for row in container.find_all(class_="rank-row"):
@@ -114,8 +167,34 @@ def _parse_priority_setups(soup: BeautifulSoup) -> tuple[MacroPrioritySetup, ...
         stars_tag = asset.find(class_=lambda c: c and c.startswith("stars-"))
         if name_tag is None or action_tag is None:
             continue
+        pair = name_tag.get_text(strip=True)
         action_classes = action_tag.get("class", [])
-        direction = Direction.SHORT if "short" in action_classes else Direction.LONG
+        # R-9 FIX (round de validation zero-régression, 02/08/2026, MAJEUR).
+        # AVANT ce correctif : `Direction.SHORT if "short" in action_classes
+        # else Direction.LONG` — toute classe absente de "short" (y compris
+        # une classe légale mais non directionnelle comme "wait", cf.
+        # commentaire de `AssetSetup.action_class` dans le moteur Macro, ou
+        # une classe invalide/absente) devenait silencieusement LONG. Asymétrie
+        # non justifiée avec `desk_parser._extract_direction`, qui lève
+        # `DeskDocumentError` sur toute classe .dir ambiguë ou absente plutôt
+        # que de deviner (audit indépendant, rapport RUN-4, R-9). Inatteignable
+        # ce cycle (`select_priority_assets` écarte déjà `direction == 0` en
+        # amont, donc seuls "long"/"short" atteignent ce point) — mais la
+        # défense en profondeur doit être symétrique entre les deux parsers
+        # plutôt que de dépendre silencieusement d'une garantie amont non
+        # documentée ici.
+        is_long = "long" in action_classes
+        is_short = "short" in action_classes
+        if is_long and not is_short:
+            direction = Direction.LONG
+        elif is_short and not is_long:
+            direction = Direction.SHORT
+        else:
+            raise MacroDocumentError(
+                f"Setup prioritaire {pair!r} : classe .asset-action ambiguë ou "
+                f"non directionnelle ({action_classes!r}) — direction non "
+                f"déterminable, document macro malformé."
+            )
         stars = 0
         if stars_tag:
             star_class = [c for c in stars_tag.get("class", []) if c.startswith("stars-")]
@@ -123,7 +202,6 @@ def _parse_priority_setups(soup: BeautifulSoup) -> tuple[MacroPrioritySetup, ...
                 stars = int(star_class[0].split("-")[1])
         # rationale : cherché dans la chaîne causale (rank-row dont le label == pair)
         rationale = ""
-        pair = name_tag.get_text(strip=True)
         for row in soup.find_all(class_="rank-row"):
             lbl = row.find(class_="rank-lbl")
             if lbl and lbl.get_text(strip=True) == pair:
@@ -137,7 +215,26 @@ def _parse_priority_setups(soup: BeautifulSoup) -> tuple[MacroPrioritySetup, ...
 
 def _parse_regime(soup: BeautifulSoup) -> tuple[str, float | None]:
     text = soup.get_text(" ", strip=True)
-    regime_match = re.search(r"Régime\s*[:\u00a0]?\s*«?\s*([A-Za-z /]+?)\s*»", text)
+    # Motif principal (inchangé) : "Régime « X »", fermé par un guillemet
+    # français explicite — essayé en premier, comportement identique à avant
+    # ce correctif pour tout document où il matche.
+    regime_match = re.search(r"Régime\s*[:\u00a0]?\s*«\s*([A-Za-z /]+?)\s*»", text)
+    if regime_match is None:
+        # R-7 FIX (round de validation zero-régression, 02/08/2026) : l'audit
+        # indépendant a re-dérivé que la regex d'origine n'atteignait QUE la
+        # 3e occurrence du mot "Régime" dans le document réel (section
+        # Volatilité ↔ Sentiment), et ratait silencieusement les deux formats
+        # sans guillemet fermant observés ailleurs dans le même document :
+        # "Régime du jour Mixed / Selective VIX : …" et
+        # "Régime identifié Mixed / Selective Confiance : 8%". Une régression
+        # de l'interpretation layer (build_interpretation, absent de ce
+        # corpus) sur le chemin déjà couvert ferait alors disparaître le
+        # régime du rapport terminal (cf. audit R-7).
+        # Repli additif : essayé UNIQUEMENT si le motif principal ne matche
+        # pas, donc zéro changement pour le cas déjà correct.
+        regime_match = re.search(
+            r"Régime\s+(?:du\s+jour|identifié)\s+([A-Za-z]+(?:\s*/\s*[A-Za-z]+)?)", text
+        )
     regime = regime_match.group(1).strip() if regime_match else "non disponible dans les documents fournis"
     conf_match = re.search(r"[Cc]onfiance\D{0,10}(\d+)\s*%", text)
     confidence = float(conf_match.group(1)) if conf_match else None
@@ -201,3 +298,5 @@ def parse_macro(html: str) -> MacroSnapshot:
         result.report_datetime, result.regime, len(result.currencies), len(result.priority_setups),
     )
     return result
+
+    
