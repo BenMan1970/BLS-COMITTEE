@@ -56,7 +56,7 @@ from bluestar import __version__
 from bluestar.decide.selection_grid import decide_all
 from bluestar.errors import DeskDocumentError, MacroDocumentError, RenderError
 from bluestar.extract.desk_parser import parse_desk, audit_document_freshness
-from bluestar.extract.macro_parser import parse_macro
+from bluestar.extract.macro_parser import parse_macro, audit_macro_document_freshness
 from bluestar.render.html_report import render_report
 
 logger = logging.getLogger("bluestar.cli")
@@ -156,7 +156,24 @@ def main(argv: list[str] | None = None) -> int:
         # B-2 / F-04 : Audit de fraîcheur du document desk
         freshness_msg = audit_document_freshness(desk, now)
         if freshness_msg:
-            logger.warning("ALERTE FRAÎCHEUR DOCUMENTAIRE : %s", freshness_msg)
+            logger.warning("ALERTE FRAÎCHEUR DOCUMENTAIRE DESK : %s", freshness_msg)
+
+        # O-8/R-10 FIX (round de validation zero-régression, 02/08/2026) :
+        # audit de fraîcheur symétrique côté MACRO — jusqu'ici seul le desk
+        # en avait un, l'asymétrie était confirmée et déclarée par l'audit
+        # indépendant (O-8/R-10). Jamais bloquant : un constat, pas un crash.
+        macro_freshness_msg = audit_macro_document_freshness(macro, now)
+        if macro_freshness_msg:
+            logger.warning("ALERTE FRAÎCHEUR DOCUMENTAIRE MACRO : %s", macro_freshness_msg)
+
+        # K-3/R-3/G4 FIX : bannières document-niveau du desk (fuseau
+        # incohérent, couverture calendrier tronquée), extraites par
+        # desk_parser mais jusqu'ici jamais journalisées ni transmises au
+        # rapport final. `getattr` défensif : tant que bluestar.models n'a
+        # pas le champ `banners`, on obtient `()` — comportement inchangé.
+        desk_banners = getattr(desk, "banners", ())
+        for _banner in desk_banners:
+            logger.warning("ALERTE DOCUMENT DESK (bannière) : %s", _banner)
             
         # B-4 : Déclaration du canal macro vide
         if not macro.priority_setups:
@@ -171,17 +188,29 @@ def main(argv: list[str] | None = None) -> int:
         # rétrogradation BLOCKED_DATA en cas de péremption > 3h.
         decisions = decide_all(desk, macro, now=now)
 
-        # F-18 : Log des cardinalités pour lever l'ambiguïté (5 + 31 = 33)
+        # C-2/K-2 : Déclaration du canal macro dans le rapport (B-4)
+        # R-18 : correction des chiffres — 4 setups prioritaires + 29 validés = 33
         logger.info(
-            "Univers desk : %d actifs · %d franchissent les gates · %d validés · %d rejetés",
+            "Univers desk : %d actifs · %d franchissent les gates · %d validés • %d rejetés",
             desk.universe_total,
             desk.universe_evaluated,
             len(desk.setups),
             len(desk.rejected)
         )
 
+        # Vérification coopérative (C-06) : le nombre de décisions doit
+        # correspondre à l'univers desk (invariant 33/33)
+        decisions_count = len(decisions)
+        if decisions_count != desk.universe_total:
+            logger.warning("DECISION_COUNT_MISMATCH: %d décisions vs %d univers",
+                           decisions_count, desk.universe_total)
+
         try:
-            report_html = render_report(desk, macro, decisions, generated_at=now)
+            # C-2/K-2 : passer macro_channel_status au renderer
+            report_html = render_report(desk, macro, decisions, generated_at=now,
+                                        macro_channel_status=macro_channel_status,
+                                        macro_freshness_msg=macro_freshness_msg,
+                                        desk_banners=desk_banners)
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(report_html, encoding="utf-8")
         except RenderError as exc:
