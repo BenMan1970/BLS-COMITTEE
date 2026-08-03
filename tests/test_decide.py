@@ -128,8 +128,14 @@ def test_currency_level_advisories_is_pure(desk, macro):
 
 
 def test_grid_version_is_pinned(decisions):
+    """Version bumpee v2.3 -> v2.4 (round de validation zero-regression du
+    02/08/2026) : R-5 (advisory IPS sur les rejets desk), R-8 (confidence
+    optionnelle dans regime_bias), R-14 (normalisation des paires d'indices),
+    G6 (advisory marche fermee) sont des changements de comportement reels
+    de la grille depuis v2.3, jamais accompagnes d'un bump avant ce round --
+    corrige ici en meme temps que le code."""
     for d in decisions.values():
-        assert d.grid_version == "bluestar-decide-v2.2"
+        assert d.grid_version == "bluestar-decide-v2.4"
 
 
 # --- Regression : invariant 33/33 (round d'audit du 27/07/2026) ------------
@@ -423,4 +429,3 @@ def test_decide_all_end_to_end_with_correlation_groups(macro):
         "confirmé SHORT par CHoCH sur GBP/USD et GBP/CAD, deux paires distinctes "
         "de GBP/NZD lui-même."
     )
-
