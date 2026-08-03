@@ -221,6 +221,27 @@ def _extract_cluster(block: Tag) -> str:
     return cluster_tag.get_text(strip=True) if cluster_tag else ""
 
 
+def _extract_cap_reason(block: Tag) -> str | None:
+    """PATCH-CAPREASON (Proposition 1, ICF v2 — audit C-05/rapport de
+    synergie du 03/08/2026). Le moteur Desk rend `<div class="cap-note">
+    {message}</div>` quand un plafond de conviction est appliqué (ex:
+    "Plafond conviction appliqué : risque macro NON ÉVALUÉ (couverture
+    calendaire insuffisante) — cap prudentiel") -- mais aucune fonction du
+    parser Comité ne le lisait avant ce correctif. Conséquence observée sur
+    le cycle du 03/08/2026 : les 3 setups publiés (dont l'unique ELIGIBLE,
+    GBP/AUD) sont plafonnés par le Desk et le Comité affiche pourtant un
+    facteur limitant vide ou "—" pour GBP/AUD, alors que la couche
+    technique a explicitement motivé un plafond.
+
+    Champ optionnel, même statut que `entry_type` (audit X-9) : il
+    n'alimente qu'un enrichissement du `limiting_factor`, jamais un état
+    (`DecisionState`). Absence de `.cap-note` = cycle sans plafond réel =
+    None, jamais une erreur -- un setup non plafonné n'a légitimement
+    aucune raison d'avoir cet élément dans le HTML."""
+    cap_tag = block.find(class_="cap-note")
+    return cap_tag.get_text(" ", strip=True) if cap_tag else None
+
+
 def _extract_factors(block: Tag) -> dict[str, float]:
     """Grille des facteurs (F1-F7, Q-rang). Optionnelle ; une valeur
     individuelle non numérique est ignorée silencieusement (comportement
@@ -398,6 +419,7 @@ def _parse_setup(block: Tag) -> DeskSetup:
     entry_type = _extract_entry_type(block)
     flags = _extract_flags(block)
     cal_status, cal_note = _extract_cal_status(block)
+    cap_reason = _extract_cap_reason(block)
 
     # PATCH-DESKPARSE-B1 (round du 31/07/2026, audit B-1/C-02) : fin de la
     # perte silencieuse. Si DeskSetup accepte les champs (modèle patché) :
@@ -422,19 +444,34 @@ def _parse_setup(block: Tag) -> DeskSetup:
         entry=entry,
         stop_loss=stop_loss,
     )
-    # X-9 FIX (round de validation zero-régression, 02/08/2026) : tentative
-    # en 3 paliers. Palier 1 (schéma complet, entry_type inclus) ; si
-    # bluestar.models.DeskSetup n'a pas encore ce champ, palier 2 (schéma
-    # B-1 historique, sans entry_type — dégradation TOLÉRÉE et journalisée,
-    # car entry_type n'est pas un flag de sécurité critique comme
-    # flags/cal_status : sa seule consommation est une advisory non
-    # bloquante "marché fermé", jamais un état) ; palier 3 (repli B-1
-    # historique) reprend EXACTEMENT la même règle stricte qu'avant ce
-    # correctif pour flags/cal_status — aucun changement de comportement
-    # sur ce point.
+    # X-9 FIX (round de validation zero-régression, 02/08/2026), étendu par
+    # PATCH-CAPREASON (Proposition 1, ICF v2, 03/08/2026) : tentative en 4
+    # paliers désormais. Palier 0 (schéma complet, cap_reason inclus) ;
+    # si bluestar.models.DeskSetup n'a pas encore ce champ, palier 1
+    # (schéma X-9, entry_type inclus mais sans cap_reason — dégradation
+    # TOLÉRÉE et journalisée, cap_reason a le même statut non-critique
+    # qu'entry_type : il n'alimente qu'un enrichissement du
+    # limiting_factor, jamais un état) ; palier 2 (schéma B-1 historique,
+    # sans cap_reason ni entry_type) ; palier 3 (repli B-1 historique)
+    # reprend EXACTEMENT la même règle stricte qu'avant ce correctif pour
+    # flags/cal_status — aucun changement de comportement sur ce point.
     try:
         return DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status,
-                         cal_note=cal_note, entry_type=entry_type)
+                         cal_note=cal_note, entry_type=entry_type, cap_reason=cap_reason)
+    except TypeError:
+        pass
+    try:
+        setup = DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status,
+                          cal_note=cal_note, entry_type=entry_type)
+        if cap_reason is not None:
+            logger.info(
+                "desk_cap_reason_extracted_but_unsupported pair=%s cap_reason=%r — "
+                "bluestar.models.DeskSetup n'a pas (encore) le champ `cap_reason` "
+                "(Proposition 1, ICF v2) ; le plafond de conviction motivé par le "
+                "Desk n'apparaîtra pas dans le facteur limitant affiché au Comité.",
+                pair, cap_reason,
+            )
+        return setup
     except TypeError:
         pass
     try:
@@ -445,6 +482,14 @@ def _parse_setup(block: Tag) -> DeskSetup:
                 "bluestar.models.DeskSetup n'a pas (encore) le champ `entry_type` "
                 "(audit X-9) ; advisory 'marché fermé' indisponible pour ce setup.",
                 pair, entry_type,
+            )
+        if cap_reason is not None:
+            logger.info(
+                "desk_cap_reason_extracted_but_unsupported pair=%s cap_reason=%r — "
+                "bluestar.models.DeskSetup n'a pas (encore) le champ `cap_reason` "
+                "(Proposition 1, ICF v2) ; le plafond de conviction motivé par le "
+                "Desk n'apparaîtra pas dans le facteur limitant affiché au Comité.",
+                pair, cap_reason,
             )
         return setup
     except TypeError as exc:
