@@ -155,7 +155,7 @@ if run_button:
     st.download_button(
         "📥 Télécharger le rapport HTML",
         data=report_html,
-        file_name=f"rapport_bluestar_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.html",
+        file_name=f"BLUESTAR_FX_Committee_Decision_Report_{datetime.now(timezone.utc).strftime('%Y_%m_%d_%H%M')}.html",
         mime="text/html",
         use_container_width=True,
     )
