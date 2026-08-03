@@ -24,7 +24,7 @@ def rendered():
 def test_output_is_valid_html(rendered):
     html, *_ = rendered
     soup = BeautifulSoup(html, "html.parser")
-    assert soup.title.get_text() == "Comité de Sélection — BLUESTAR"
+    assert soup.title.get_text() == "BLUESTAR FX Committee Decision Report"
 
 
 def test_logo_star_is_blue_on_white_background(rendered):
