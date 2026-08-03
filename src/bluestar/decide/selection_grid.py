@@ -106,9 +106,19 @@ MAX_DESK_DOC_AGE_H = 3.0        # NON CALIBRÉ — garde de fraîcheur documenta
                                 # restent des faits historiques) sont rétrogradés BLOCKED_DATA.
                                 # Cas motivant : rapport du 31/07 publiant un WATCH sur un
                                 # snapshot desk âgé de 3h37, 8 minutes avant un tier A.
-GRID_VERSION = "bluestar-decide-v2.3"  # incremente : canal flags/cal_status, garde de fraicheur,
+GRID_VERSION = "bluestar-decide-v2.4"  # incremente : canal flags/cal_status, garde de fraicheur,
                                         # double conflit de jambes, contre-reference CLUSTER_DUP
                                         # - round de validation independante du 31/07/2026
+                                        # v2.4 (02/08/2026, round de validation zero-regression) :
+                                        # R-5 (advisory IPS sur les rejets desk), R-8 (confidence
+                                        # optionnelle dans regime_bias, jamais de forcing sous
+                                        # REGIME_BIAS_MIN_CONFIDENCE), R-14 (normalisation des
+                                        # paires d'indices Desk<->Macro), G6 (advisory marche
+                                        # fermee sur une entree Market). Quatre changements de
+                                        # comportement reels de la grille, jamais accompagnes d'un
+                                        # bump de version jusqu'ici -- corrige ici. Voir
+                                        # test_grid_version_is_pinned, qui existe precisement pour
+                                        # forcer cette revue a chaque changement.
 REGIME_BIAS_MIN_CONFIDENCE = 20.0       # R-8 FIX (round du 02/08/2026) — NON CALIBRÉ par ce
                                         # module ; valeur alignée sur le seuil de 20% observé
                                         # dans le narratif macro produit en amont ("confiance
