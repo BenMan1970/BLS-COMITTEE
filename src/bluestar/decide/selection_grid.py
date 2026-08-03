@@ -703,6 +703,54 @@ def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) ->
     )
 
 
+def _augment_limiting_factor_with_cap_reason(decision: Decision, setup: DeskSetup) -> Decision:
+    """PATCH-CAPREASON (Proposition 1, ICF v2 — rapport de synergie du
+    03/08/2026, C-05). Fait apparaître le plafond de conviction motivé par
+    le Desk (`.cap-note`, cf. `_extract_cap_reason` côté parser) dans le
+    `limiting_factor` affiché au Comité.
+
+    Constat qui motive ce patch : sur le cycle du 03/08/2026, les 3 setups
+    publiés par le Desk (EUR/CAD, GBP/AUD, AUD/CHF — dont l'unique
+    ELIGIBLE) sont TOUS plafonnés ("risque macro NON ÉVALUÉ (couverture
+    calendaire insuffisante)") et le Comité affichait pourtant un facteur
+    limitant vide ou "—" pour GBP/AUD : le motif du plafond, déjà calculé
+    et rendu par la couche technique, était perdu à la frontière.
+
+    Garanties de non-régression, même patron que
+    `_augment_limiting_factor_with_flags` :
+    - `getattr(setup, "cap_reason", None)` : si `DeskSetup` ne porte pas
+      encore ce champ, on obtient `None` et la fonction retourne `decision`
+      INCHANGÉE. Zéro comportement nouveau tant que le champ n'existe pas
+      réellement sur l'objet.
+    - Un setup non plafonné (`cap_reason is None`) ressort avec un
+      `Decision` strictement identique à avant ce patch (même
+      `limiting_factor`, même `state`) — seule la présence d'un plafond
+      motivé change la sortie, et uniquement le texte du `limiting_factor`
+      (jamais le `state`, qui reste sous la seule autorité de
+      `_decide_setup_core` : ce patch DIVULGUE un plafond déjà appliqué en
+      amont par le Desk, il n'en applique aucun nouveau côté Comité).
+    - Idempotent : si le texte du plafond figure déjà dans le
+      `limiting_factor`, rien n'est dupliqué.
+    """
+    cap_reason = getattr(setup, "cap_reason", None)
+    if not cap_reason:
+        return decision
+
+    clean_lf = decision.limiting_factor
+    if cap_reason in clean_lf:
+        return decision
+
+    # Le placeholder "—" (aucun facteur limitant) n'a plus lieu d'être une
+    # fois qu'un plafond motivé est connu : on le remplace plutôt que de
+    # produire "— [plafond desk : ...]", qui lirait comme une contradiction.
+    base = "" if clean_lf.strip() == "—" else clean_lf
+
+    return replace(
+        decision,
+        limiting_factor=(base + f" [plafond desk : {cap_reason}]").strip(),
+    )
+
+
 def decide_setup(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
@@ -717,6 +765,7 @@ def decide_setup(
     Comité)."""
     decision = _decide_setup_core(setup, macro, correlation_groups, now=now)
     decision = _augment_limiting_factor_with_flags(decision, setup)
+    decision = _augment_limiting_factor_with_cap_reason(decision, setup)
     # PATCH-CALSTATUS (round du 31/07/2026, audit F-05/C-04) : le statut
     # calendaire par setup (OK/PROXIMITY/WATCH), rendu par le Desk dans
     # `.cal-row` mais jamais extrait avant le patch parser associé, est
