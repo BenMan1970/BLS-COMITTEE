@@ -41,15 +41,7 @@ with _title_col:
     )
 with _refresh_col:
     st.write("")  # espaceur vertical pour aligner le bouton avec le titre
-    if st.button("🔄 Rafraîchir", use_container_width=True,
-                 help="Vide le cache Streamlit et l'état de session, puis relance l'app à froid. "
-                      "N'affecte jamais les décisions elles-mêmes : chaque génération de rapport "
-                      "relit déjà les fichiers uploadés à zéro, sans aucun cache de données "
-                      "(vérifié : aucun @st.cache_data/@st.cache_resource/session_state n'est "
-                      "utilisé dans ce pipeline). Utile surtout pour confirmer visuellement, via "
-                      "le numéro de version ci-dessus, que le code déployé est bien le dernier "
-                      "poussé sur le repo — un redéploiement de CODE sur Streamlit Cloud reste "
-                      "piloté par la plateforme elle-même, pas par ce bouton."):
+    if st.button("🔄 Rafraîchir", use_container_width=True):
         st.cache_data.clear()
         st.cache_resource.clear()
         st.session_state.clear()
