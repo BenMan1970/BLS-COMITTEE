@@ -269,7 +269,7 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Comité de Sélection — BLUESTAR</title>
+<title>BLUESTAR FX Committee Decision Report</title>
 <style>{_CSS}</style>
 </head>
 <body>
@@ -366,4 +366,3 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
                 counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK],
                 total_advisories)
     return html_out
-
