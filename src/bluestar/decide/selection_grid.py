@@ -340,6 +340,40 @@ def currency_level_advisories(setup: DeskSetup, macro: MacroSnapshot) -> tuple[s
     return tuple(advisories)
 
 
+def calendar_coverage_advisories(
+    setup: DeskSetup, calendar_coverage: Mapping[str, frozenset[str]] = types.MappingProxyType({}),
+) -> tuple[str, ...]:
+    """PATCH-CALCOVERAGE (Proposition 2, ICF v2 — rapport de synergie du
+    03/08/2026, C-3). Signal NON bloquant : si une jambe du setup porte une
+    devise explicitement déclarée hors couverture calendaire par le
+    producteur (`calendar_coverage["uncovered"]`, cf. `_parse_calendar_coverage`
+    côté parser), le dit — pour que `cal_status = OK` sur cette jambe ne
+    soit pas silencieusement lu comme "dégagé" quand il signifie
+    "non mesuré". Reformule au niveau de la ligne de décision ce que la
+    bannière du document ne dit qu'au niveau document.
+
+    Ne change jamais `state` — même contrat que toutes les autres
+    advisories de ce module. `calendar_coverage` vide ou absent (tant
+    qu'ENGINE.V9.py n'émet pas le bloc JSON, ou tant que
+    bluestar.models.DeskSnapshot ne porte pas le champ) -> aucune advisory,
+    comportement strictement inchangé."""
+    legs = setup.leg_currencies()
+    if legs is None or not calendar_coverage:
+        return ()
+    uncovered = calendar_coverage.get("uncovered", frozenset())
+    if not uncovered:
+        return ()
+    touched = [ccy for ccy in legs if ccy in uncovered]
+    if not touched:
+        return ()
+    return (
+        f"couverture calendaire : {', '.join(touched)} hors du flux calendrier "
+        f"producteur ce cycle — un statut calendaire 'OK' sur cette/ces devise(s) "
+        f"signifie 'non mesuré', pas 'dégagé' (cf. bannière document desk) — "
+        f"non bloquant ici, à arbitrer avant toute action sur ce setup",
+    )
+
+
 def technical_currency_advisories(
     setup: DeskSetup, correlation_groups: Mapping[str, tuple] = types.MappingProxyType({})
 ) -> tuple[str, ...]:
@@ -476,6 +510,7 @@ def _decide_setup_core(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
     now: datetime | None = None,
+    calendar_coverage: Mapping[str, frozenset[str]] = types.MappingProxyType({}),
 ) -> Decision:
     """Fonction pure : (DeskSetup, MacroSnapshot) -> Decision.
     Aucun effet de bord, aucun I/O — testable par golden files (cf. tests/).
@@ -499,7 +534,7 @@ def _decide_setup_core(
 
     advisories = currency_level_advisories(setup, macro) + technical_currency_advisories(
         setup, correlation_groups
-    )
+    ) + calendar_coverage_advisories(setup, calendar_coverage)
 
     # X-9/G6 FIX : qualification explicite d'une entrée Market générée
     # marché fermé — advisory non bloquante, jamais un changement d'état.
@@ -755,15 +790,19 @@ def decide_setup(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
     now: datetime | None = None,
+    calendar_coverage: Mapping[str, frozenset[str]] = types.MappingProxyType({}),
 ) -> Decision:
     """Point d'entrée public, comportement inchangé pour tout appelant
     existant (même signature élargie d'un seul paramètre optionnel `now`,
-    défaut None -- cf. `_decide_setup_core` pour X-9/G6) -- voir
+    défaut None -- cf. `_decide_setup_core` pour X-9/G6 -- puis d'un second
+    paramètre optionnel `calendar_coverage`, défaut mapping vide -- cf.
+    Proposition 1 ICF v2 pour le fil de transmission) -- voir
     `_decide_setup_core` pour la logique de décision elle-même et
     `_augment_limiting_factor_with_flags` pour le correctif F6-BIS (câblage
     des flags Desk C1-C10 majeurs dans le limiting_factor affiché au
     Comité)."""
-    decision = _decide_setup_core(setup, macro, correlation_groups, now=now)
+    decision = _decide_setup_core(setup, macro, correlation_groups, now=now,
+                                  calendar_coverage=calendar_coverage)
     decision = _augment_limiting_factor_with_flags(decision, setup)
     decision = _augment_limiting_factor_with_cap_reason(decision, setup)
     # PATCH-CALSTATUS (round du 31/07/2026, audit F-05/C-04) : le statut
@@ -1008,7 +1047,13 @@ def decide_all(
             "Le rapport final doit le declarer (audit B-4)."
         )
 
-    decisions = [decide_setup(s, macro, desk.correlation_groups, now=now) for s in desk.setups]
+    decisions = [
+        decide_setup(
+            s, macro, desk.correlation_groups, now=now,
+            calendar_coverage=getattr(desk, "calendar_coverage", types.MappingProxyType({})),
+        )
+        for s in desk.setups
+    ]
 
     # PATCH-FRESHNESS (round du 31/07/2026, audit B-2/F-04) : un document
     # desk perime ne doit plus pouvoir produire des decisions setups sans
