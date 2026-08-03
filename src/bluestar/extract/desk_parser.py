@@ -667,6 +667,52 @@ def _parse_rejected(soup: BeautifulSoup) -> tuple[DeskRejectedSetup, ...]:
     return tuple(_parse_rejected_suspended(soup) + _parse_rejected_table(soup))
 
 
+def _parse_calendar_coverage(soup: BeautifulSoup) -> dict[str, frozenset[str]]:
+    """PATCH-CALCOVERAGE (Proposition 2, ICF v2 — rapport de synergie du
+    03/08/2026, C-3). Lit un éventuel bloc `<script type="application/json"
+    id="calendar-coverage">{"covered": [...], "uncovered": [...]}</script>`
+    émis par le moteur Desk, document-niveau (même patron que
+    `_parse_correlation_groups`).
+
+    Constat qui motive ce patch : la bannière du document dit déjà, en
+    prose française, qu'un statut `OK` sur une devise hors du filtre
+    producteur signifie "non mesuré", pas "dégagé" (ex: cycle du
+    03/08/2026, filtre producteur CAD/NZD/USD, devises AUD/CHF/EUR/GBP/JPY
+    hors couverture). Mais rien ne joint cette information à la ligne de
+    décision par actif : le lecteur voit `cal_status = OK` en vert pour
+    GBP/AUD sans savoir que les deux jambes sont hors couverture.
+
+    ⚠️ CE PARSER SUPPOSE UN CONTRAT D'ÉMISSION CÔTÉ DESK (ENGINE.V9.py)
+    QUI N'EST PAS CONFIRMÉ DANS LE CORPUS FOURNI À CE TOUR (UNKNOWN — le
+    fichier ENGINE.V9.py n'a pas été fourni). Tant que le moteur Desk
+    n'émet pas ce bloc, cette fonction retourne systématiquement le dict
+    vide ci-dessous et AUCUNE advisory de couverture n'est produite —
+    strictement inoffensif, jamais une erreur, jamais une décision.
+
+    Absent ou malformé -> covered=frozenset() et uncovered=frozenset() :
+    donnée d'appoint, ne conditionne aucune décision, son absence ne rend
+    pas le document desk invalide (même statut que correlation_groups)."""
+    empty = {"covered": frozenset(), "uncovered": frozenset()}
+    tag = soup.find("script", id="calendar-coverage")
+    if tag is None or not tag.string:
+        return empty
+    try:
+        raw = json.loads(tag.string)
+    except json.JSONDecodeError:
+        logger.warning("calendar_coverage_json_invalide — ignoré, advisory de couverture indisponible ce cycle")
+        return empty
+    if not isinstance(raw, dict):
+        return empty
+    covered = raw.get("covered", [])
+    uncovered = raw.get("uncovered", [])
+    if not isinstance(covered, list) or not isinstance(uncovered, list):
+        return empty
+    return {
+        "covered": frozenset(c for c in covered if isinstance(c, str)),
+        "uncovered": frozenset(c for c in uncovered if isinstance(c, str)),
+    }
+
+
 def parse_desk(html: str) -> DeskSnapshot:
     soup = BeautifulSoup(html, "html.parser")
 
@@ -679,6 +725,7 @@ def parse_desk(html: str) -> DeskSnapshot:
     rejected = _parse_rejected(soup)
     correlation_groups = _parse_correlation_groups(soup)
     banners = _parse_banners(soup)
+    calendar_coverage = _parse_calendar_coverage(soup)
 
     if len(setups) + len(rejected) != universe_total:
         logger.warning(
@@ -704,6 +751,25 @@ def parse_desk(html: str) -> DeskSnapshot:
     # sur la construction historique plutôt que de lever une exception —
     # mais on NE PERD PAS l'alerte en silence : elle est loguée en warning
     # explicite pour que l'absence de couverture du modèle soit visible.
+    #
+    # PATCH-CALCOVERAGE (Proposition 2, ICF v2, 03/08/2026) étend la même
+    # cascade à `calendar_coverage`. Contrairement à `banners`, un dict de
+    # couverture VIDE (cas normal tant qu'ENGINE.V9.py n'émet pas le bloc
+    # JSON, cf. `_parse_calendar_coverage`) n'est PAS journalisé comme une
+    # perte -- il n'y a rien à perdre. Seul un dict non-vide qui ne pourrait
+    # pas être attaché au modèle serait une perte réelle, journalisée en
+    # warning au même titre que `banners`.
+    try:
+        result = DeskSnapshot(**base_kwargs, banners=banners, calendar_coverage=calendar_coverage)
+    except TypeError:
+        pass
+    else:
+        logger.info(
+            "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
+            result.report_datetime, result.universe_evaluated, result.universe_total,
+            len(result.setups), len(result.rejected),
+        )
+        return result
     try:
         result = DeskSnapshot(**base_kwargs, banners=banners)
     except TypeError as exc:
@@ -716,6 +782,15 @@ def parse_desk(html: str) -> DeskSnapshot:
                 len(banners), banners, exc,
             )
         result = DeskSnapshot(**base_kwargs)
+    else:
+        if calendar_coverage["covered"] or calendar_coverage["uncovered"]:
+            logger.warning(
+                "desk_calendar_coverage_extracted_but_unsupported covered=%d uncovered=%d — "
+                "appliquer le patch (champ `calendar_coverage: dict = {}`) dans "
+                "bluestar/models.py::DeskSnapshot pour ne pas perdre cette donnée "
+                "de couverture calendaire",
+                len(calendar_coverage["covered"]), len(calendar_coverage["uncovered"]),
+            )
     logger.info(
         "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
         result.report_datetime, result.universe_evaluated, result.universe_total,
