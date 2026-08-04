@@ -18,7 +18,15 @@ import html as html_lib
 import logging
 from datetime import datetime, timezone
 
-from bluestar.decide.selection_grid import AssetClass, Decision, DecisionState, LegVerdict
+from bluestar.decide.selection_grid import (
+    AssetClass,
+    Decision,
+    DecisionState,
+    LegVerdict,
+    STRENGTH_STRONG_MIN,
+    STRENGTH_WEAK_MAX,
+    StrengthThemeDivergence,
+)
 from bluestar.errors import RenderError
 from bluestar.extract.desk_parser import audit_document_freshness
 from bluestar.models import DeskSnapshot, MacroSnapshot
@@ -68,9 +76,13 @@ _ASSET_BADGE_LABEL = {
 
 
 def _advisory_breakdown(ordered: tuple[Decision, ...]) -> tuple[int, int, int]:
-    """PATCH-ADVSPLIT (Proposition 5, ICF v2). Extrait en fonction pure
-    pour être testable indépendamment du rendu HTML complet. Retourne
-    (total, actionnables [ELIGIBLE/WATCH], informatives [reste])."""
+    """PATCH-ADVSPLIT (Proposition 5, ICF v2). Extrait en fonction pure pour
+    être testable indépendamment du rendu HTML complet. Retourne
+    (total, actionnables [ELIGIBLE/WATCH], informatives [reste]).
+
+    Motif : un compteur global sur-signale d'un ordre de grandeur quand la
+    grande majorité des advisories portent sur des lignes déjà bloquées ou
+    rejetées, donc non actionnables."""
     total = sum(len(d.advisories) for d in ordered)
     actionable = sum(
         len(d.advisories) for d in ordered
@@ -121,6 +133,52 @@ def _render_row(d: Decision) -> str:
         <td class="factor">{_esc(d.limiting_factor)}</td>
         <td class="detail">{source_code_html}</td>
       </tr>"""
+
+
+def _render_synergy_section(
+    divergences: tuple[StrengthThemeDivergence, ...],
+    intersection_msg: str | None,
+) -> str:
+    """ICF v2, Propositions 3 & 4 — bloc DOCUMENTAIRE.
+
+    Contrat explicite : ce bloc n'affiche que des constats. Aucun élément
+    rendu ici ne correspond à un état, un score ou un gate — les deux
+    diagnostics sont produits par des fonctions pures qui ne retournent pas
+    de `Decision`."""
+    if not divergences:
+        div_html = (
+            '<div class="detail muted">aucune divergence franche détectée '
+            f'(seuils de lecture : force ≥ {STRENGTH_STRONG_MIN:.0f} = forte, '
+            f'≤ {STRENGTH_WEAK_MAX:.0f} = faible) — ou thèmes desk / scores de force '
+            'indisponibles dans les documents fournis.</div>'
+        )
+    else:
+        items = "".join(f"<li>{_esc(d.detail)}</li>" for d in divergences)
+        div_html = f'<ul class="advisory-list">{items}</ul>'
+
+    inter_html = (
+        f'<div class="detail">{_esc(intersection_msg)}</div>' if intersection_msg
+        else '<div class="detail muted">intersection non vide, ou canal macro vide '
+             '(cas déjà déclaré par le statut du canal macro ci-dessus) — le garde-fou '
+             'de conflit frontal a pu s\'exercer normalement.</div>'
+    )
+
+    return f"""
+  <div class="section synergy" style="font-size:11px;margin-top:20px;border-top:2px solid var(--royal-dark);padding-top:12px">
+    <div class="sec-hdr" style="padding-bottom:6px;border-bottom:1px solid var(--border)">
+      <div class="sec-ttl">Diagnostics de synergie Macro × Desk</div>
+    </div>
+    <div class="syn-note">Constats d'affichage uniquement : aucun état, aucun score, aucune
+      éligibilité de ce rapport n'est modifié par cette section.</div>
+    <div class="syn-block">
+      <div class="syn-ttl">Force macro (momentum prix D1) ↔ Thème desk (structure MTF)</div>
+      {div_html}
+    </div>
+    <div class="syn-block">
+      <div class="syn-ttl">Intersection priorités macro × setups validés desk</div>
+      {inter_html}
+    </div>
+  </div>"""
 
 
 _CSS = """
@@ -198,6 +256,11 @@ tr:nth-child(even) td{background:#FAFBFF}
 .muted{color:var(--slate);font-style:italic}
 .advisory-list{margin:0;padding-left:14px;line-height:1.6}
 .factor{font-size:11px;font-weight:700;color:var(--royal-dark)}
+.syn-note{font-family:var(--font-mono);font-size:9.5px;color:var(--slate);margin:8px 0 10px}
+.syn-block{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--royal);
+  border-radius:8px;padding:10px 14px;margin-bottom:10px}
+.syn-ttl{font-family:var(--font-mono);font-size:9.5px;font-weight:700;color:var(--royal);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .footer-note{margin-top:16px;font-size:10px;color:var(--slate);font-family:var(--font-mono);
   border-top:1px solid var(--border);padding-top:10px}
 @media print{
@@ -216,42 +279,41 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
                    generated_at: datetime | None = None,
                    macro_channel_status: str | None = None,
                    macro_freshness_msg: str | None = None,
-                   desk_banners: tuple[str, ...] = ()) -> str:
+                   desk_banners: tuple[str, ...] = (),
+                   strength_theme_divergences: tuple[StrengthThemeDivergence, ...] = (),
+                   macro_intersection_msg: str | None = None) -> str:
     """Génère le rapport HTML complet. Fonction quasi pure : seule dépendance
     externe est l'horodatage de génération (injectable pour les tests).
-    
+
     macro_channel_status: déclaration du statut du canal macro (G1/B-4).
     Si None, déduit de macro.priority_setups.
 
     macro_freshness_msg: message d'alerte de fraîcheur du document MACRO
-    (O-8/R-10, audit 02/08/2026) — symétrique de l'audit de fraîcheur desk
-    déjà en place ci-dessous. None (défaut) préserve le comportement
-    précédent pour tout appelant qui ne le calcule pas encore.
+    (O-8/R-10) — symétrique de l'audit de fraîcheur desk. None (défaut)
+    préserve le comportement précédent.
 
-    desk_banners: bannières document-niveau du desk (ex. couverture
-    calendrier tronquée, fuseau incohérent — K-3/R-3/G4, audit 02/08/2026),
-    extraites par `bluestar.extract.desk_parser`. Tuple vide (défaut) :
-    rendu strictement identique à avant ce paramètre.
-    """
+    desk_banners: bannières document-niveau du desk (K-3/R-3/G4). Tuple vide
+    (défaut) : rendu strictement identique à avant ce paramètre.
+
+    strength_theme_divergences / macro_intersection_msg (ICF v2, P3/P4) :
+    diagnostics de synergie, PUREMENT documentaires. Valeurs par défaut
+    neutres : un appelant qui ne les fournit pas obtient le même rapport
+    qu'avant, augmenté d'une section qui déclare explicitement l'absence de
+    diagnostic (jamais un silence ambigu)."""
     if not decisions:
         raise RenderError("Aucune décision à rendre — decisions est vide.")
 
     generated_at = generated_at or datetime.now(timezone.utc)
 
-    # PATCH-B2/F04 (audit 31/07/2026) : calcule l'alerte de fraîcheur documentaire
-    # pour l'afficher dans le rapport final, garantissant la transparence.
+    # PATCH-B2/F04 : alerte de fraîcheur documentaire affichée dans le rapport.
     freshness_msg = audit_document_freshness(desk, generated_at)
     freshness_html = ""
     if freshness_msg:
         freshness_html = f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR DESK : {_esc(freshness_msg)}</div>'
-    # O-8/R-10 FIX : la couche Macro n'avait aucun audit de fraîcheur
-    # symétrique — seul le desk en avait un. Même gabarit visuel, message
-    # distinct pour ne jamais confondre les deux couches périmées.
+    # O-8/R-10 FIX : la couche Macro n'avait aucun audit de fraîcheur symétrique.
     if macro_freshness_msg:
         freshness_html += f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR MACRO : {_esc(macro_freshness_msg)}</div>'
-    # K-3/R-3/G4 FIX : les bannières document-niveau du desk (fuseau
-    # incohérent, couverture calendrier tronquée) existaient dans le HTML
-    # source mais n'atteignaient jamais le rapport du Comité.
+    # K-3/R-3/G4 FIX : bannières document-niveau du desk.
     banners_html = "".join(
         f'<div class="freshness-warn">⚠️ ALERTE DESK (bannière document) : {_esc(b)}</div>'
         for b in desk_banners
@@ -274,14 +336,10 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
 
     total_advisories, actionable_advisories, informative_advisories = _advisory_breakdown(ordered)
 
-    # PATCH-DUALREGIME (Proposition 6, ICF v2 — Règle Absolue 4). Le Desk
-    # porte son propre "régime" (état calendaire, ex: POST_POLICY_REPRICING),
-    # distinct du régime Macro (état de marché) affiché juste avant. On les
-    # nomme distinctement plutôt que de n'afficher qu'un seul "Régime" qui
-    # laisserait croire à une source unique. getattr défensif : si
-    # bluestar.models.DeskSnapshot ne porte pas encore `macro_regime_label`
-    # (Proposition 6 pas encore active côté modèle), la ligne se dégrade
-    # proprement plutôt que de lever une exception.
+    # PATCH-DUALREGIME (Proposition 6 — Règle Absolue 4). Le Desk porte son
+    # propre « régime » (état calendaire), distinct du régime Macro (état de
+    # marché). On les nomme distinctement plutôt que d'afficher un seul
+    # « Régime » qui laisserait croire à une source unique. getattr défensif.
     _desk_regime_value = getattr(desk, "macro_regime_label", None)
     _desk_regime_html = (
         f'Régime desk (état calendaire) : <b>{_esc(_desk_regime_value)}</b>'
@@ -289,7 +347,18 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
         'Régime desk (état calendaire) : <span class="muted">non disponible</span>'
     )
 
+    # ICF v2, Proposition 2 : rappel document-niveau de la couverture calendaire.
+    _uncovered = sorted(getattr(desk, "calendar_coverage", {}).get("uncovered", ()) or ())
+    _coverage_html = (
+        f'Couverture calendaire desk : <b>{len(_uncovered)}</b> devise(s) HORS couverture '
+        f'({_esc(", ".join(_uncovered))}) — « OK » y signifie « non mesuré »'
+        if _uncovered else
+        'Couverture calendaire desk : <span class="muted">non déclarée par le document</span>'
+    )
+
     grid_version = ordered[0].grid_version
+
+    synergy_html = _render_synergy_section(strength_theme_divergences, macro_intersection_msg)
 
     html_out = f"""<!DOCTYPE html>
 <html lang="fr">
@@ -332,65 +401,6 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
   <div class="meta-dates">
     Régime macro (état de marché) : <b>{_esc(macro.regime)}</b> (confiance {_esc(macro.regime_confidence_pct)}%) ·
     {_desk_regime_html} ·
+    {_coverage_html} ·
     Univers desk : <b>{desk.universe_total}</b> actifs · <b>{desk.universe_evaluated}</b> franchissent les gates · <b>{len(desk.setups)}</b> validés · <b>{len(desk.rejected)}</b> rejetés ·
-    Décisions comité : <b>{len(ordered)}/{desk.universe_total}</b> ·
-    Grille de décision : <b>{_esc(grid_version)}</b>
-  </div>
-
-  <div class="kpis">
-    <div class="kpi royal"><div class="lbl">Univers traité</div><div class="val">{len(ordered)}</div><div class="hint">sur {desk.universe_total} actifs desk</div></div>
-    <div class="kpi top"><div class="lbl">ELIGIBLE</div><div class="val">{counts[DecisionState.ELIGIBLE]}</div><div class="hint">{_esc(eligible_pairs)}</div></div>
-    <div class="kpi mid"><div class="lbl">WATCH</div><div class="val">{counts[DecisionState.WATCH]}</div><div class="hint">{_esc(watch_pairs)}</div></div>
-    <div class="kpi low"><div class="lbl">BLOCKED</div><div class="val">{counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK]}</div><div class="hint">{_esc(blocked_pairs)}</div></div>
-    <div class="kpi low"><div class="lbl">REJECT</div><div class="val">{counts[DecisionState.REJECT]}</div><div class="hint">rejets desk + jambe unique</div></div>
-    <div class="kpi royal"><div class="lbl">Advisories</div><div class="val">{total_advisories}</div><div class="hint">{actionable_advisories} actionnable(s) [ELIGIBLE/WATCH] · {informative_advisories} informative(s) [BLOCKED/REJECT]</div></div>
-  </div>
-
-  <!-- Intégrité des décisions — transmission des informations critiques -->
-  <div class="section" style="font-size:11px;margin-top:20px;border-top:2px solid var(--royal-dark);padding-top:12px">
-    <div class="sec-hdr" style="padding-bottom:6px;border-bottom:1px solid var(--border)">
-      <div class="sec-ttl">Intégrité & Transmission</div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-      <div class="abox wait" style="font-size:12px">
-        <div style="margin-bottom:4px;font-weight:700;color:var(--royal-dark)">Canal Macro</div>
-        <div style="font-family:var(--mono)">Statut : {_esc(macro_channel_status or "ACTIF")} — 
-          {_esc("aucun setup prioritaire macro" if not macro.priority_setups else "priorités calculées")}</div>
-        <div style="font-family:var(--mono);margin-top:2px">Confusion : {_esc(f"confiance {macro.regime_confidence_pct}%" if macro.regime_confidence_pct else "N/A")}</div>
-        <div style="font-family:var(--mono);margin-top:2px">Fraîcheur macro : {_esc(macro_freshness_msg or "dans le seuil ou non évaluée")}</div>
-      </div>
-      <div class="abox wait" style="font-size:12px">
-        <div style="margin-bottom:4px;font-weight:700;color:var(--royal-dark)">Transmission</div>
-        <div style="font-family:var(--mono)">Décisions : {len(ordered)}/{desk.universe_total} — 
-          {_esc("invariant vérifié" if len(ordered) == desk.universe_total else "INCIDENT")}</div>
-        <div style="font-family:var(--mono);margin-top:2px">Macro channel : {_esc(macro_channel_status or "non déclaré")}</div>
-      </div>
-    </div>
-  </div>
-
-  <table>
-    <thead><tr>
-      <th>Setup</th><th>Verdict par jambe</th><th>Advisories (non bloquants)</th>
-      <th>Décision</th><th>Facteur limitant réel</th><th>Code rejet desk</th>
-    </tr></thead>
-    <tbody>{rows_html}
-    </tbody>
-  </table>
-
-  <div class="footer-note">
-    ELIGIBLE ≠ EXECUTER : ce rapport sort du moteur d'éligibilité seul. Toute exécution
-    réelle nécessite en aval un moteur de portefeuille (exposition, corrélation,
-    plafond de positions) hors périmètre de ce document. Les advisories sont des
-    signaux informatifs qui n'ont jamais modifié un état — leur éventuelle
-    escalade en règle bloquante est une décision de gouvernance humaine, pas
-    une inférence automatique.
-  </div>
-</div>
-</body>
-</html>"""
-
-    logger.info("report_rendered setups=%d eligible=%d watch=%d blocked=%d advisories=%d",
-                len(ordered), counts[DecisionState.ELIGIBLE], counts[DecisionState.WATCH],
-                counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK],
-                total_advisories)
-    return html_out
+    Décisions comité : <b>{len(ordered)}/{desk.universe_total
