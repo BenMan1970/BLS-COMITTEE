@@ -101,6 +101,40 @@ def _parse_event_risk(soup: BeautifulSoup) -> str:
     return m.group(1) if m else "non disponible dans les documents fournis"
 
 
+def _parse_macro_regime_label(soup: BeautifulSoup) -> str | None:
+    """PATCH-DUALREGIME (Proposition 6, ICF v2 — rapport de synergie du
+    03/08/2026, Règle Absolue 4). Le bandeau Desk (.page-subbar) porte son
+    propre "Régime : X" (ex: POST_POLICY_REPRICING — état calendaire,
+    dérivé de la fenêtre d'événements macro autour du cycle), totalement
+    distinct du "Régime «Y»" du Macro Briefing (ex: Mixed / Selective —
+    état de marché, issu d'un vote multi-facteur). Les deux portent le même
+    mot "régime" pour deux constructions différentes ; avant ce patch, le
+    Comité n'affichait que celui du Macro, sous une étiquette qui laissait
+    croire à une source unique.
+
+    Ce patch ne fait QUE divulguer -- aucune décision, aucun état, aucun
+    gate ne dépend de ce champ (cf. Rejets Internes du rapport de synergie
+    : injecter la force macro dans un score serait un double comptage ;
+    même logique ici, on affiche, on n'arbitre pas).
+
+    Patron d'extraction : span-frère indépendant (PATCH-THEMES-BLEED,
+    même raison -- ne jamais ancrer sur le texte aplati du bandeau, un
+    badge intercalé pourrait fuiter dans le régime comme il fuitait dans
+    les thèmes avant le 31/07/2026). Regex tolérante à l'accent (ancrage
+    C-9 du rapport de synergie : `macro_parser._parse_regime` échoue
+    silencieusement sur un document sans accents -- on ne reproduit pas
+    cette fragilité ici)."""
+    subbar = soup.find(class_="page-subbar")
+    if subbar is None:
+        return None
+    for span in subbar.find_all("span", recursive=False):
+        text = span.get_text(" ", strip=True)
+        m = re.match(r"R[eé]gime\s*:\s*(.+)", text)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def _parse_themes(soup: BeautifulSoup) -> tuple[str, ...]:
     """PATCH-THEMES-BLEED (round du 31/07/2026) : l'ancienne version regexait
     le texte aplati de tout le page-subbar avec une frontière
@@ -726,6 +760,7 @@ def parse_desk(html: str) -> DeskSnapshot:
     correlation_groups = _parse_correlation_groups(soup)
     banners = _parse_banners(soup)
     calendar_coverage = _parse_calendar_coverage(soup)
+    macro_regime_label = _parse_macro_regime_label(soup)
 
     if len(setups) + len(rejected) != universe_total:
         logger.warning(
@@ -759,11 +794,36 @@ def parse_desk(html: str) -> DeskSnapshot:
     # perte -- il n'y a rien à perdre. Seul un dict non-vide qui ne pourrait
     # pas être attaché au modèle serait une perte réelle, journalisée en
     # warning au même titre que `banners`.
+    #
+    # PATCH-DUALREGIME (Proposition 6, ICF v2, 03/08/2026) ajoute un
+    # quatrième palier, le plus externe (le plus complet), pour
+    # `macro_regime_label` -- même statut non-critique que les précédents :
+    # divulgation pure, jamais consommée par `decide_all`/`decide_setup`.
+    try:
+        result = DeskSnapshot(**base_kwargs, banners=banners, calendar_coverage=calendar_coverage,
+                              macro_regime_label=macro_regime_label)
+    except TypeError:
+        pass
+    else:
+        logger.info(
+            "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
+            result.report_datetime, result.universe_evaluated, result.universe_total,
+            len(result.setups), len(result.rejected),
+        )
+        return result
     try:
         result = DeskSnapshot(**base_kwargs, banners=banners, calendar_coverage=calendar_coverage)
     except TypeError:
         pass
     else:
+        if macro_regime_label is not None:
+            logger.info(
+                "desk_macro_regime_label_extracted_but_unsupported pair=n/a value=%r — "
+                "appliquer le patch (champ `macro_regime_label: str | None = None`) dans "
+                "bluestar/models.py::DeskSnapshot pour afficher les deux régimes "
+                "(Macro et Desk) distinctement au Comité (Proposition 6, Règle Absolue 4)",
+                macro_regime_label,
+            )
         logger.info(
             "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
             result.report_datetime, result.universe_evaluated, result.universe_total,
@@ -790,6 +850,13 @@ def parse_desk(html: str) -> DeskSnapshot:
                 "bluestar/models.py::DeskSnapshot pour ne pas perdre cette donnée "
                 "de couverture calendaire",
                 len(calendar_coverage["covered"]), len(calendar_coverage["uncovered"]),
+            )
+        if macro_regime_label is not None:
+            logger.info(
+                "desk_macro_regime_label_extracted_but_unsupported value=%r — "
+                "bluestar/models.py::DeskSnapshot n'a pas non plus `calendar_coverage`, "
+                "ce cycle dégrade au schéma banners-only (Proposition 6 indisponible)",
+                macro_regime_label,
             )
     logger.info(
         "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
