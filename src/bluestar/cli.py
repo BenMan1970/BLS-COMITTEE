@@ -53,7 +53,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from bluestar import __version__
-from bluestar.decide.selection_grid import decide_all
+from bluestar.decide.selection_grid import (
+    decide_all,
+    macro_priority_intersection_status,
+    strength_theme_divergences,
+)
 from bluestar.errors import DeskDocumentError, MacroDocumentError, RenderError
 from bluestar.extract.desk_parser import parse_desk, audit_document_freshness
 from bluestar.extract.macro_parser import parse_macro, audit_macro_document_freshness
@@ -188,6 +192,16 @@ def main(argv: list[str] | None = None) -> int:
         # rétrogradation BLOCKED_DATA en cas de péremption > 3h.
         decisions = decide_all(desk, macro, now=now)
 
+        # ICF v2, Propositions 3 & 4 : diagnostics de synergie, purement
+        # documentaires. Calculés APRÈS decide_all et jamais réinjectés dans
+        # les décisions — ils ne peuvent modifier aucun état par construction.
+        divergences = strength_theme_divergences(desk, macro)
+        for _d in divergences:
+            logger.warning("SYNERGIE FORCE↔THEME : %s", _d.detail)
+        intersection_msg = macro_priority_intersection_status(desk, macro)
+        if intersection_msg:
+            logger.warning("SYNERGIE INTERSECTION : %s", intersection_msg)
+
         # C-2/K-2 : Déclaration du canal macro dans le rapport (B-4)
         # R-18 : correction des chiffres — 4 setups prioritaires + 29 validés = 33
         logger.info(
@@ -210,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
             report_html = render_report(desk, macro, decisions, generated_at=now,
                                         macro_channel_status=macro_channel_status,
                                         macro_freshness_msg=macro_freshness_msg,
-                                        desk_banners=desk_banners)
+                                        desk_banners=desk_banners,
+                                        strength_theme_divergences=divergences,
+                                        macro_intersection_msg=intersection_msg)
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(report_html, encoding="utf-8")
         except RenderError as exc:
