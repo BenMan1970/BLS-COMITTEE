@@ -274,6 +274,21 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
 
     total_advisories, actionable_advisories, informative_advisories = _advisory_breakdown(ordered)
 
+    # PATCH-DUALREGIME (Proposition 6, ICF v2 — Règle Absolue 4). Le Desk
+    # porte son propre "régime" (état calendaire, ex: POST_POLICY_REPRICING),
+    # distinct du régime Macro (état de marché) affiché juste avant. On les
+    # nomme distinctement plutôt que de n'afficher qu'un seul "Régime" qui
+    # laisserait croire à une source unique. getattr défensif : si
+    # bluestar.models.DeskSnapshot ne porte pas encore `macro_regime_label`
+    # (Proposition 6 pas encore active côté modèle), la ligne se dégrade
+    # proprement plutôt que de lever une exception.
+    _desk_regime_value = getattr(desk, "macro_regime_label", None)
+    _desk_regime_html = (
+        f'Régime desk (état calendaire) : <b>{_esc(_desk_regime_value)}</b>'
+        if _desk_regime_value else
+        'Régime desk (état calendaire) : <span class="muted">non disponible</span>'
+    )
+
     grid_version = ordered[0].grid_version
 
     html_out = f"""<!DOCTYPE html>
@@ -315,7 +330,8 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
   {freshness_html}
 
   <div class="meta-dates">
-    Régime macro : <b>{_esc(macro.regime)}</b> (confiance {_esc(macro.regime_confidence_pct)}%) ·
+    Régime macro (état de marché) : <b>{_esc(macro.regime)}</b> (confiance {_esc(macro.regime_confidence_pct)}%) ·
+    {_desk_regime_html} ·
     Univers desk : <b>{desk.universe_total}</b> actifs · <b>{desk.universe_evaluated}</b> franchissent les gates · <b>{len(desk.setups)}</b> validés · <b>{len(desk.rejected)}</b> rejetés ·
     Décisions comité : <b>{len(ordered)}/{desk.universe_total}</b> ·
     Grille de décision : <b>{_esc(grid_version)}</b>
