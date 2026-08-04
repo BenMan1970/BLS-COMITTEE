@@ -2,18 +2,25 @@
 Grille de décision Bluestar v2 — fonctions pures, sans I/O.
 
 Implémente la Partie 4.1 de la spécification institutionnelle :
-- prédicat echo(leg) gelé, sur seuils numériques explicites (résout la critique
-  du Head of Quant Research : "écho macro cohérent" n'était défini nulle part
-  comme une fonction dans le prompt v1) ;
+- prédicat echo(leg) gelé, sur seuils numériques explicites ;
 - état BLOCKED_DATA prioritaire sur tout scoring en cas de contradiction
-  inter-sources (résout la critique du Risk Management) ;
-- mode "jambe unique" explicite pour instruments non pairés, avec exclusion
-  plutôt que scoring forcé (résout la critique de l'expert cross-asset) ;
+  inter-sources ;
+- mode "jambe unique" explicite pour instruments non pairés ;
 - sortie en 5 états, jamais un score composite.
 
 Toute constante de seuil est nommée et regroupée en tête de fichier
 (Roadmap #6 : "registre gelé des seuils"). Modifier un seuil = modifier ce
 fichier, jamais une interprétation au moment de la décision.
+
+ICF v2 (04/08/2026) — trois ajouts, TOUS additifs et non bloquants :
+  - Proposition 1 : le motif de plafond de conviction du Desk (`cap_reason`)
+    est injecté dans le `limiting_factor` affiché ;
+  - Proposition 2 : advisory par jambe quand la devise est hors couverture
+    calendaire déclarée par le Desk ;
+  - Propositions 3 & 4 : deux fonctions PURES de diagnostic de synergie
+    (`strength_theme_divergences`, `macro_priority_intersection_status`),
+    consommées uniquement par la couche de rendu — elles ne retournent
+    AUCUNE `Decision` et ne peuvent donc changer aucun état, par construction.
 """
 
 from __future__ import annotations
@@ -40,24 +47,18 @@ logger = logging.getLogger("bluestar.decide")
 
 
 # ---------------------------------------------------------------------------
-# X-9/G6 FIX (round de validation zero-régression, 02/08/2026, gate G6).
+# X-9/G6 FIX (02/08/2026, gate G6).
 #
-# Aucune des trois couches (Macro, Desk, Comité) ne vérifiait jusqu'ici que
-# le marché FX cash était réellement ouvert au moment de la génération, alors
-# que le Desk peut publier une entrée "Market" (qui utilise le prix courant
-# tel quel comme niveau d'entrée) même un week-end. L'audit indépendant
-# (rapport RUN-4, gate G6) exige a minima "une qualification explicite d'un
-# ELIGIBLE Market sur marché déclaré fermé en amont" — c'est le choix retenu
-# ici (advisory non bloquante), cohérent avec le contrat déjà établi dans ce
-# module : les advisories signalent, elles ne changent jamais l'état.
+# Aucune des trois couches ne vérifiait que le marché FX cash était réellement
+# ouvert au moment de la génération, alors que le Desk peut publier une entrée
+# "Market" même un week-end. Choix retenu : advisory non bloquante, cohérent
+# avec le contrat de ce module (les advisories signalent, ne changent jamais
+# l'état).
 #
 # Bornes UTC répliquées à l'identique de `macro_engine.session_label`
 # (Fri 22:00 UTC -> Sun 22:00 UTC = marché fermé). Dette de duplication
-# assumée par choix : ce module (bluestar.decide) n'importe pas macro_engine
-# (application Streamlit distincte, hors du package bluestar), au même titre
-# que TIER_WINDOWS est dupliqué entre calendar_layer.py et v10.py plutôt que
-# de créer un couplage inter-applications. Toute modification des bornes
-# dans macro_engine.session_label DOIT être répercutée ici à l'identique.
+# assumée : ce module n'importe pas macro_engine (application distincte).
+# Toute modification des bornes là-bas DOIT être répercutée ici.
 # ---------------------------------------------------------------------------
 def _is_fx_market_closed(now_utc: datetime) -> bool:
     """True si le marché FX cash est fermé (week-end) à `now_utc` (UTC)."""
@@ -76,59 +77,47 @@ def _is_fx_market_closed(now_utc: datetime) -> bool:
 #
 # Les seuils IPS (capitulation < 20, crowded > 80) NE SONT PLUS déclarés ici.
 # Ils vivent exclusivement dans bluestar.models (IPS_CAPITULATION_MAX,
-# IPS_CROWDED_MIN, consommés par ips_zone()) — c'est le seul endroit où la
-# logique de zonage s'exécute réellement. Ce module y accède uniquement via
-# CurrencyMacroData.zone (cf. echo_leg ci-dessous), jamais par une copie
-# locale des valeurs numériques. C'est la correction du bug trouvé lors du
-# round d'audit du 19/07/2026 (registre "gelé" dupliqué mais jamais lu).
+# IPS_CROWDED_MIN, consommés par ips_zone()).
 #
-# MAX_TECH_AGE_DAYS et MIN_RISK_REWARD : seuils propres à ce module, réellement
-# utilisés ci-dessous. Statut de calibration honnête (relevé convergent des
-# audits Claude 4.8 / GPT-5.5 / Kimi K2) : ce sont des valeurs choisies par
-# l'auteur du système, PAS dérivées d'un backtest, d'une convention desk ou
-# d'une décision de comité datée. "Gelé et versionné" signifie ici
+# Statut de calibration honnête : ce sont des valeurs choisies par l'auteur du
+# système, PAS dérivées d'un backtest. "Gelé et versionné" signifie ici
 # "traçable et non modifiable silencieusement", PAS "calibré et validé".
 # ---------------------------------------------------------------------------
-MAX_TECH_AGE_DAYS = 45          # NON CALIBRÉ — valeur provisoire de l'auteur, pas un empirique
-MIN_RISK_REWARD = 1.5           # NON CALIBRÉ — valeur provisoire de l'auteur, pas un empirique
-                                # NOTE F-09 (audit 31/07/2026) : cette garde est aujourd'hui
-                                # INATTEIGNABLE car le preflight Desk rejette déjà tout R:R < 1.5
-                                # (RR_OUT_OF_RANGE) en amont. Elle est CONSERVÉE volontairement :
-                                # une couche de validation indépendante doit re-vérifier les
-                                # invariants de la couche précédente — elle redevient active
-                                # automatiquement si le seuil Desk est un jour abaissé.
-MAX_IPS_AGE_DAYS_WARN = 5       # RÉSERVÉ, NON CÂBLÉ — déclaré mais aucun code ne le consulte
-                                 # encore (décote de fraîcheur IPS = roadmap, pas implémentée).
-                                 # Volontairement non utilisé plutôt que silencieusement ignoré :
-                                 # tout futur retrait ou activation doit passer par ce commentaire.
-MAX_DESK_DOC_AGE_H = 3.0        # NON CALIBRÉ — garde de fraîcheur documentaire (audit B-2,
-                                # round 31/07/2026). Au-delà, les setups (pas les rejets, qui
-                                # restent des faits historiques) sont rétrogradés BLOCKED_DATA.
-                                # Cas motivant : rapport du 31/07 publiant un WATCH sur un
-                                # snapshot desk âgé de 3h37, 8 minutes avant un tier A.
-GRID_VERSION = "bluestar-decide-v2.4"  # incremente : canal flags/cal_status, garde de fraicheur,
-                                        # double conflit de jambes, contre-reference CLUSTER_DUP
-                                        # - round de validation independante du 31/07/2026
-                                        # v2.4 (02/08/2026, round de validation zero-regression) :
-                                        # R-5 (advisory IPS sur les rejets desk), R-8 (confidence
-                                        # optionnelle dans regime_bias, jamais de forcing sous
-                                        # REGIME_BIAS_MIN_CONFIDENCE), R-14 (normalisation des
-                                        # paires d'indices Desk<->Macro), G6 (advisory marche
-                                        # fermee sur une entree Market). Quatre changements de
-                                        # comportement reels de la grille, jamais accompagnes d'un
-                                        # bump de version jusqu'ici -- corrige ici. Voir
-                                        # test_grid_version_is_pinned, qui existe precisement pour
-                                        # forcer cette revue a chaque changement.
-REGIME_BIAS_MIN_CONFIDENCE = 20.0       # R-8 FIX (round du 02/08/2026) — NON CALIBRÉ par ce
-                                        # module ; valeur alignée sur le seuil de 20% observé
-                                        # dans le narratif macro produit en amont ("confiance
-                                        # 8% < seuil 20% -> régime reclassé"). Ce seuil vivait
-                                        # jusqu'ici exclusivement dans interpretation.py (absent
-                                        # de ce corpus) : le Comité n'avait AUCUNE garde
-                                        # indépendante et pouvait forcer un biais directionnel
-                                        # jambe-unique sur un régime affiché mais peu fiable.
-                                        # À recalibrer si le seuil amont change (re-test
-                                        # obligatoire, cf. audit R-8).
+MAX_TECH_AGE_DAYS = 45          # NON CALIBRÉ — valeur provisoire de l'auteur
+MIN_RISK_REWARD = 1.5           # NON CALIBRÉ — valeur provisoire de l'auteur
+                                # NOTE F-09 : garde aujourd'hui INATTEIGNABLE (le
+                                # preflight Desk rejette déjà tout R:R < 1.5). CONSERVÉE
+                                # volontairement : une couche de validation indépendante
+                                # doit re-vérifier les invariants de la couche précédente.
+MAX_IPS_AGE_DAYS_WARN = 5       # RÉSERVÉ, NON CÂBLÉ — déclaré mais aucun code ne le lit
+MAX_DESK_DOC_AGE_H = 3.0        # NON CALIBRÉ — garde de fraîcheur documentaire (audit B-2)
+GRID_VERSION = "bluestar-decide-v2.5"
+# v2.5 (04/08/2026, ICF v2 — audit de synergie inter-apps) : trois changements
+# de sortie réels, tous additifs et non bloquants —
+#   (P1) `cap_reason` du Desk injecté dans le `limiting_factor` ;
+#   (P2) advisory de couverture calendaire par jambe ;
+#   (P7) `factors_missing` transporté (plomberie, aucune règle ajoutée).
+# Les diagnostics P3/P4 sont des fonctions pures hors du chemin `Decision` et
+# ne justifieraient pas à eux seuls un bump — les trois précédents, si.
+# Voir test_grid_version_is_pinned, qui existe précisément pour forcer cette
+# revue à chaque changement.
+# v2.4 (02/08/2026) : R-5, R-8, R-14, G6.
+
+REGIME_BIAS_MIN_CONFIDENCE = 20.0
+# R-8 FIX — NON CALIBRÉ par ce module ; valeur alignée sur le seuil de 20%
+# observé dans le narratif macro produit en amont ("confiance 8% < seuil 20%
+# -> régime reclassé"). Ce seuil vivait jusqu'ici exclusivement dans
+# interpretation.py : le Comité n'avait AUCUNE garde indépendante et pouvait
+# forcer un biais directionnel jambe-unique sur un régime peu fiable.
+
+# ICF v2, Proposition 3 — seuils du diagnostic Force macro ↔ Thème desk.
+# NON CALIBRÉS : bornes de lecture choisies pour ne déclencher que sur une
+# divergence FRANCHE (une devise dans le tiers haut du classement de force
+# alors que le Desk la déclare Bearish, ou l'inverse). La zone intermédiaire
+# ]40 ; 60[ ne produit AUCUN diagnostic — deux mesures d'horizons différents
+# ont le droit de ne pas se superposer sans que ce soit une anomalie.
+STRENGTH_STRONG_MIN = 60.0
+STRENGTH_WEAK_MAX = 40.0
 
 
 # Libellés d'advisory associés au statut calendaire par setup (PATCH-CALSTATUS,
@@ -175,45 +164,31 @@ class DecisionState(str, Enum):
     WATCH = "WATCH"
     REJECT = "REJECT"
     BLOCKED_DATA = "BLOCKED_DATA"
-    BLOCKED_RISK = "BLOCKED_RISK"  # non calculé ici : nécessite le moteur de portefeuille (hors périmètre de decide())
+    BLOCKED_RISK = "BLOCKED_RISK"  # non calculé ici : nécessite le moteur de portefeuille
 
 
 class AssetClass(str, Enum):
-    """Classe d'actif, indépendante de la grille macro×IPS (qui ne
-    s'applique qu'aux paires FX à deux devises). Ajoutée pour fermer
-    l'invariant §1.1 ('33/33, jamais 3/33') : avant cette extension, tout
-    instrument dont le symbole ne se décomposait pas en deux codes ISO-like
-    de 3 lettres (indices actions, ex. SPX500/USD, US30/USD, NAS100/USD,
-    DE30/EUR) était REJECT par construction, avec le même message générique
-    — ce n'est pas un rejet motivé, c'est une catégorie non gérée."""
+    """Classe d'actif, indépendante de la grille macro×IPS (qui ne s'applique
+    qu'aux paires FX à deux devises). Ferme l'invariant §1.1 ('33/33, jamais
+    3/33') : avant cette extension, tout instrument dont le symbole ne se
+    décomposait pas en deux codes ISO-like de 3 lettres était REJECT par
+    construction, avec un message générique — ce n'est pas un rejet motivé,
+    c'est une catégorie non gérée."""
     FX_PAIR = "FX_PAIR"
     EQUITY_INDEX = "EQUITY_INDEX"
     METAL = "METAL"
     OTHER = "OTHER"
 
 
-# Codes alpha-3 de métaux précieux : passent le même test syntaxique qu'une
-# devise FX (3 lettres) mais n'en sont pas une — XAU/USD reste une paire à
-# deux "devises" valides pour leg_currencies() (comportement existant,
-# documenté, non modifié), mais on la classe correctement ici pour
-# l'affichage et pour le mode jambe unique des futurs instruments similaires
-# qui ne passeraient pas ce test (ex. un symbole sans second code à 3 lettres).
 _METAL_CODES = frozenset({"XAU", "XAG", "XPT", "XPD"})
-
-# Bases d'indices actions connues du corpus réel (round d'audit 27/07/2026).
-# Liste non exhaustive : le test principal de classification reste "la base
-# contient un chiffre" (SPX500, US30, NAS100, DE30...), ce qui couvre les
-# nouveaux indices sans mise à jour de cette liste. Conservée pour les rares
-# bases sans chiffre (ex. futurs "UK100", "DAX" selon la convention du desk).
 _KNOWN_INDEX_BASES = frozenset({"SPX500", "US30", "NAS100", "DE30", "UK100", "JPN225"})
 
 
 def classify_asset(pair: str) -> AssetClass:
     """Classe un symbole d'actif à partir de son code seul (pas de la
-    direction). Ancrage : §3.5/§3.6 du cahier d'extension du comité — les
-    indices actions du corpus réel ont un symbole dont la base contient un
-    chiffre ; les métaux ont un code alpha-3 reconnu qui passe le même test
-    syntaxique qu'une devise FX sans en être une."""
+    direction). Ancrage §3.5/§3.6 : les indices actions du corpus réel ont un
+    symbole dont la base contient un chiffre ; les métaux ont un code alpha-3
+    reconnu qui passe le même test syntaxique qu'une devise FX sans en être une."""
     if "/" not in pair:
         return AssetClass.OTHER
     base, _, quote = pair.partition("/")
@@ -232,23 +207,14 @@ def regime_bias(
     min_confidence: float = REGIME_BIAS_MIN_CONFIDENCE,
 ) -> Direction | None:
     """Biais directionnel implicite du régime macro pour un actif non-FX en
-    mode jambe unique (§4 du cahier d'extension). Lecture délibérément
-    grossière, par mots-clés Risk-On/Risk-Off dans le libellé de régime : un
-    régime ambigu (ex. 'Mixed / Selective', corpus réel du 27/07/2026) ne
-    produit AUCUN biais (None) plutôt qu'un biais forcé — cf. invariant
-    'jamais de forcing' (§4).
+    mode jambe unique (§4). Lecture délibérément grossière, par mots-clés
+    Risk-On/Risk-Off : un régime ambigu (ex. 'Mixed / Selective') ne produit
+    AUCUN biais (None) plutôt qu'un biais forcé — invariant 'jamais de forcing'.
 
-    R-8 FIX (round de validation zero-régression, 02/08/2026) : `confidence`
-    est OPTIONNEL et vaut `None` par défaut — tout appelant existant qui ne
-    le fournit pas obtient un comportement strictement inchangé. Quand
-    l'appelant fournit la confiance de régime publiée (ex.
-    `macro.regime_confidence_pct`) et qu'elle est sous `min_confidence`,
-    AUCUN biais n'est forcé, même si le libellé du régime contient
-    'risk-on'/'risk-off' — un régime affiché à confiance publiée faible ne
-    doit pas piloter un instrument jambe unique. Avant ce correctif, le
-    Comité n'avait aucune garde indépendante sur ce point (audit R-8) : la
-    seule protection connue vivait dans `interpretation.py`, absent de ce
-    corpus."""
+    R-8 FIX : `confidence` est OPTIONNEL (défaut None) — tout appelant existant
+    qui ne le fournit pas obtient un comportement strictement inchangé. Sous
+    `min_confidence`, AUCUN biais n'est forcé même si le libellé contient
+    'risk-on'/'risk-off'."""
     if confidence is not None and confidence < min_confidence:
         return None
     regime_lc = (regime or "").lower()
@@ -261,8 +227,8 @@ def regime_bias(
             return Direction.SHORT
         return None
     if asset_class == AssetClass.METAL:
-        # Métal = valeur refuge : Risk-Off pousse vers le long, Risk-On vers
-        # le short — symétrique de l'indice actions.
+        # Métal = valeur refuge : Risk-Off pousse vers le long, Risk-On vers le
+        # short — symétrique de l'indice actions.
         if is_risk_off:
             return Direction.LONG
         if is_risk_on:
@@ -291,11 +257,24 @@ class Decision:
     source_reject_code: str | None = None
 
 
+@dataclass(frozen=True)
+class StrengthThemeDivergence:
+    """ICF v2, Proposition 3 — constat de divergence entre DEUX mesures
+    différentes de la « force » d'une devise, produites par deux applications
+    distinctes sur deux horizons distincts. N'est PAS une `Decision` :
+    ce type ne peut, par construction, modifier aucun état."""
+    currency: str
+    macro_strength_score: float
+    macro_strength_rank: int | None
+    desk_theme: str
+    detail: str
+
+
 def _implied_macro_currency_bias(macro: MacroSnapshot) -> dict[str, list[tuple[Direction, str, int]]]:
     """Pour chaque devise, liste les (direction implicite, paire d'origine, étoiles)
     déduites des setups prioritaires macro. Ex : GBP/USD SHORT (macro) implique
-    une thèse macro baissière sur GBP (short) et haussière sur USD (long) —
-    même si aucun setup desk ne porte sur GBP/USD lui-même."""
+    une thèse macro baissière sur GBP et haussière sur USD — même si aucun setup
+    desk ne porte sur GBP/USD lui-même."""
     bias: dict[str, list[tuple[Direction, str, int]]] = {}
     for p in macro.priority_setups:
         if "/" not in p.pair:
@@ -309,17 +288,11 @@ def _implied_macro_currency_bias(macro: MacroSnapshot) -> dict[str, list[tuple[D
 
 
 def currency_level_advisories(setup: DeskSetup, macro: MacroSnapshot) -> tuple[str, ...]:
-    """
-    Signal NON bloquant : pour chaque jambe du setup, vérifie si la devise porte
-    une thèse macro directionnelle implicite (déduite d'un AUTRE setup prioritaire
-    macro que la paire exacte du desk) qui contredit le sens de cette jambe ici.
-
-    C'est le mécanisme qui aurait signalé GBP/AUD long comme discutable même sans
-    intervention manuelle : GBP porte une thèse macro SHORT via GBP/USD et GBP/JPY
-    (aucun des deux n'est GBP/AUD), donc ce prédicat la détecte au niveau devise —
-    sans jamais changer `state`. La décision d'escalader cet advisory en règle
-    bloquante reste un choix humain explicite (cf. README, section limitations).
-    """
+    """Signal NON bloquant : pour chaque jambe du setup, vérifie si la devise
+    porte une thèse macro directionnelle implicite (déduite d'un AUTRE setup
+    prioritaire macro que la paire exacte du desk) qui contredit le sens de
+    cette jambe ici. Ne change jamais `state` — l'escalade en règle bloquante
+    reste un choix humain explicite."""
     legs = setup.leg_currencies()
     if legs is None:
         return ()
@@ -330,7 +303,7 @@ def currency_level_advisories(setup: DeskSetup, macro: MacroSnapshot) -> tuple[s
     for currency, leg_direction in ((long_ccy, Direction.LONG), (short_ccy, Direction.SHORT)):
         for implied_dir, origin_pair, stars in bias_map.get(currency, []):
             if origin_pair == setup.pair:
-                continue  # déjà couvert par _macro_priority_conflict (conflit direct sur la paire exacte)
+                continue  # déjà couvert par _macro_priority_conflict
             if implied_dir != leg_direction:
                 advisories.append(
                     f"devise {currency} : thèse macro implicite {implied_dir.value.upper()} "
@@ -340,55 +313,13 @@ def currency_level_advisories(setup: DeskSetup, macro: MacroSnapshot) -> tuple[s
     return tuple(advisories)
 
 
-def calendar_coverage_advisories(
-    setup: DeskSetup, calendar_coverage: Mapping[str, frozenset[str]] = types.MappingProxyType({}),
-) -> tuple[str, ...]:
-    """PATCH-CALCOVERAGE (Proposition 2, ICF v2 — rapport de synergie du
-    03/08/2026, C-3). Signal NON bloquant : si une jambe du setup porte une
-    devise explicitement déclarée hors couverture calendaire par le
-    producteur (`calendar_coverage["uncovered"]`, cf. `_parse_calendar_coverage`
-    côté parser), le dit — pour que `cal_status = OK` sur cette jambe ne
-    soit pas silencieusement lu comme "dégagé" quand il signifie
-    "non mesuré". Reformule au niveau de la ligne de décision ce que la
-    bannière du document ne dit qu'au niveau document.
-
-    Ne change jamais `state` — même contrat que toutes les autres
-    advisories de ce module. `calendar_coverage` vide ou absent (tant
-    qu'ENGINE.V9.py n'émet pas le bloc JSON, ou tant que
-    bluestar.models.DeskSnapshot ne porte pas le champ) -> aucune advisory,
-    comportement strictement inchangé."""
-    legs = setup.leg_currencies()
-    if legs is None or not calendar_coverage:
-        return ()
-    uncovered = calendar_coverage.get("uncovered", frozenset())
-    if not uncovered:
-        return ()
-    touched = [ccy for ccy in legs if ccy in uncovered]
-    if not touched:
-        return ()
-    return (
-        f"couverture calendaire : {', '.join(touched)} hors du flux calendrier "
-        f"producteur ce cycle — un statut calendaire 'OK' sur cette/ces devise(s) "
-        f"signifie 'non mesuré', pas 'dégagé' (cf. bannière document desk) — "
-        f"non bloquant ici, à arbitrer avant toute action sur ce setup",
-    )
-
-
 def technical_currency_advisories(
     setup: DeskSetup, correlation_groups: Mapping[str, tuple] = types.MappingProxyType({})
 ) -> tuple[str, ...]:
-    """
-    Signal NON bloquant, complémentaire de currency_level_advisories() : au lieu
-    d'une thèse macro implicite déduite d'un setup prioritaire, compare chaque
-    jambe du setup aux signaux TECHNIQUES réels (CHoCH etc.) déjà calculés par
-    le moteur pour cette devise sur d'AUTRES paires (merged_pipeline.json ::
-    correlation_groups, transporté depuis le round du 27/07/2026).
-
-    Différence avec currency_level_advisories() : ici la contradiction vient
-    d'un signal technique confirmé sur un autre instrument (ex. XAU/USD et
-    NAS100/USD déjà baissiers en USD), pas d'une extrapolation macro. Ne
-    change jamais `state` — même contrat que toutes les autres advisories.
-    """
+    """Signal NON bloquant, complémentaire de currency_level_advisories() : au
+    lieu d'une thèse macro implicite, compare chaque jambe du setup aux signaux
+    TECHNIQUES réels (CHoCH etc.) déjà calculés par le moteur pour cette devise
+    sur d'AUTRES paires. Ne change jamais `state`."""
     legs = setup.leg_currencies()
     if legs is None or not correlation_groups:
         return ()
@@ -398,14 +329,14 @@ def technical_currency_advisories(
     for currency, leg_direction in ((long_ccy, Direction.LONG), (short_ccy, Direction.SHORT)):
         for sig in correlation_groups.get(currency, ()):
             if sig.symbol == setup.pair or sig.direction is None or "/" not in sig.symbol:
-                continue  # même paire, signal Neutral, ou instrument non pairé (rien à inverser)
+                continue  # même paire, signal Neutral, ou instrument non pairé
             sig_base, sig_quote = sig.symbol.split("/")
             if currency == sig_base:
                 implied_dir = sig.direction
             elif currency == sig_quote:
                 implied_dir = Direction.SHORT if sig.direction == Direction.LONG else Direction.LONG
             else:
-                continue  # ne devrait pas arriver (clé du dict != devise du symbole), garde défensive
+                continue  # garde défensive
             if implied_dir != leg_direction:
                 advisories.append(
                     f"devise {currency} : signal technique {sig.kind} confirme {currency} "
@@ -416,19 +347,43 @@ def technical_currency_advisories(
     return tuple(advisories)
 
 
+def calendar_coverage_advisories(pair: str, uncovered_currencies: frozenset[str]) -> tuple[str, ...]:
+    """ICF v2, Proposition 2 — advisory NON bloquante par jambe.
+
+    Le Desk déclare, au niveau DOCUMENT, quelles devises son flux calendrier
+    couvre réellement (filtre producteur). Une jambe portant sur une devise
+    hors couverture affiche pourtant un `cal_status = OK` vert : « OK » y
+    signifie « non mesuré », pas « dégagé ». Cette advisory joint enfin le
+    constat document-niveau à la ligne de décision concernée.
+
+    Silencieuse (tuple vide) si le Desk n'a pas déclaré sa couverture — une
+    couverture non déclarée n'autorise AUCUNE conclusion, ni dans un sens ni
+    dans l'autre, et surtout pas une advisory sur toutes les lignes."""
+    if not uncovered_currencies or "/" not in pair:
+        return ()
+    out: list[str] = []
+    for token in pair.split("/"):
+        code = token.strip().upper()
+        if len(code) == 3 and code.isalpha() and code in uncovered_currencies:
+            out.append(
+                f"couverture calendaire : devise {code} absente du flux calendrier du Desk "
+                f"— un statut calendaire « OK » sur cette jambe signifie « non mesuré », "
+                f"pas « dégagé » ; non bloquant, à arbitrer avant toute action sur ce setup"
+            )
+    return tuple(out)
+
+
 def echo_leg(currency_code: str, is_long_leg: bool, macro: MacroSnapshot) -> LegEcho:
     """
     Prédicat gelé évaluant une seule jambe (une devise) d'un setup.
 
-    Règle explicite (remplace la définition circulaire du prompt v1) :
-      - IPS indisponible                                   -> INDETERMINE
-      - IPS en zone normale (20 <= IPS <= 80)               -> NEUTRE
+    Règle explicite :
+      - IPS indisponible                          -> INDETERMINE
+      - IPS en zone normale (20 <= IPS <= 80)      -> NEUTRE
       - IPS extrême (< 20)
-          - jambe LONGUE  (on achète une devise en capitulation) -> CONFLUENCE (mean-reversion)
-          - jambe COURTE  (on vend une devise déjà en capitulation, donc déjà
-            "crowded short") -> CONFLIT (on enfonce un positionnement déjà extrême,
-            risque de squeeze)
-      - IPS extrême (> 80) -> symétrique : jambe courte = CONFLUENCE, jambe longue = CONFLIT
+          - jambe LONGUE  -> CONFLUENCE (mean-reversion)
+          - jambe COURTE  -> CONFLIT (on enfonce un positionnement déjà extrême)
+      - IPS extrême (> 80) -> symétrique
     """
     data = macro.currencies.get(currency_code)
     if data is None or data.ips is None:
@@ -457,22 +412,11 @@ def echo_leg(currency_code: str, is_long_leg: bool, macro: MacroSnapshot) -> Leg
     return LegEcho(currency_code, LegVerdict.INDETERMINE, "zone IPS non résolue")
 
 
-# R-14 FIX (round de validation zero-régression, 02/08/2026, MOYEN).
-#
-# Le Desk nomme les indices avec une notation "paire" (DE30/EUR, US30/USD,
-# NAS100/USD, SPX500/USD) ; le Macro (et `config.INDICES`) les nomme par
-# leur symbole nu (DAX, US30, NAS100, SPX500). `_macro_priority_conflict`
-# compare `p.pair == setup.pair` par égalité stricte : une priorité macro
-# publiée sur "DAX" ne peut structurellement jamais être confrontée à un
-# setup Desk sur "DE30/EUR", quelle que soit la direction de l'un ou de
-# l'autre (audit indépendant, rapport RUN-4, R-14 : "Une priorité macro sur
-# indice ne peut structurellement jamais être confrontée au Desk"). Dormant
-# à ce jour (aucune priorité macro sur indice observée), mais activable dès
-# que le Macro publie une thèse directionnelle sur un indice.
-#
-# Correspondances reprises telles que citées par l'audit lui-même (pas
-# déduites ni devinées) : DAX <-> DE30/EUR, US30 <-> US30/USD,
-# NAS100 <-> NAS100/USD, SPX500 <-> SPX500/USD.
+# R-14 FIX (02/08/2026) : le Desk nomme les indices avec une notation "paire"
+# (DE30/EUR, US30/USD) ; le Macro les nomme par leur symbole nu (DAX, US30).
+# `_macro_priority_conflict` comparait par égalité stricte : une priorité macro
+# sur "DAX" ne pouvait structurellement jamais être confrontée à un setup Desk
+# sur "DE30/EUR". Correspondances reprises telles que citées par l'audit.
 _INDEX_PAIR_ALIASES: dict[str, str] = {
     "DE30/EUR": "DAX",
     "US30/USD": "US30",
@@ -482,21 +426,14 @@ _INDEX_PAIR_ALIASES: dict[str, str] = {
 
 
 def _normalize_pair(pair: str) -> str:
-    """Normalise une notation Desk (paire) vers la notation Macro (symbole
-    nu) quand un alias d'indice existe ; retourne `pair` inchangé sinon
-    (comportement identique à avant ce correctif pour tout instrument FX,
-    XAU/USD, ou toute paire déjà dans la même notation des deux côtés)."""
+    """Normalise une notation Desk (paire) vers la notation Macro (symbole nu)
+    quand un alias d'indice existe ; retourne `pair` inchangé sinon."""
     return _INDEX_PAIR_ALIASES.get(pair, pair)
 
 
 def _macro_priority_conflict(setup: DeskSetup, macro: MacroSnapshot) -> str | None:
     """Retourne un message si la paire est explicitement priorisée par le macro
-    dans une direction opposée à celle du desk. None sinon.
-
-    R-14 FIX : comparaison normalisée (`_normalize_pair`) pour que les
-    indices (notation Desk "DE30/EUR" vs notation Macro "DAX") puissent
-    enfin se confronter. Zéro régression pour tout instrument sans alias :
-    `_normalize_pair` retourne la chaîne inchangée."""
+    dans une direction opposée à celle du desk. None sinon."""
     setup_pair_norm = _normalize_pair(setup.pair)
     for p in macro.priority_setups:
         if _normalize_pair(p.pair) == setup_pair_norm and p.direction != setup.direction:
@@ -510,38 +447,22 @@ def _decide_setup_core(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
     now: datetime | None = None,
-    calendar_coverage: Mapping[str, frozenset[str]] = types.MappingProxyType({}),
 ) -> Decision:
     """Fonction pure : (DeskSetup, MacroSnapshot) -> Decision.
-    Aucun effet de bord, aucun I/O — testable par golden files (cf. tests/).
+    Aucun effet de bord, aucun I/O — testable par golden files.
 
-    `correlation_groups` est optionnel (PATCH-CORRGROUPS, round du 28/07/2026) :
-    absent, la fonction se comporte exactement comme avant ce round.
-
-    `now` est optionnel (X-9/G6 FIX, round du 02/08/2026) : absent (défaut),
-    aucune advisory de marché fermé n'est produite — comportement
-    strictement inchangé pour tout appelant/golden file existant qui ne le
-    fournit pas.
-
-    PATCH-F6BIS (round du 31/07/2026) : ce corps de fonction est un
-    renommage pur de l'ancien `decide_setup` — AUCUNE ligne de logique
-    n'a été modifiée ici. Le nouveau `decide_setup` (plus bas) est un
-    wrapper fin qui appelle cette fonction telle quelle puis fait passer
-    son résultat dans `_augment_limiting_factor_with_flags`. Ce découpage
-    garantit une non-régression totale : tout golden file / test existant
-    qui appelait `decide_setup` sur un setup SANS flags majeurs obtient un
-    `Decision` strictement identique à avant ce patch."""
+    PATCH-F6BIS : ce corps est un renommage pur de l'ancien `decide_setup` —
+    AUCUNE ligne de logique de décision n'y a été modifiée depuis. Les
+    enrichissements (flags, cal_status, cap_reason, couverture calendaire)
+    vivent dans le wrapper `decide_setup`, ce qui garantit qu'un setup nu
+    produit un `Decision` strictement identique à avant ces patchs."""
 
     advisories = currency_level_advisories(setup, macro) + technical_currency_advisories(
         setup, correlation_groups
-    ) + calendar_coverage_advisories(setup, calendar_coverage)
+    )
 
-    # X-9/G6 FIX : qualification explicite d'une entrée Market générée
-    # marché fermé — advisory non bloquante, jamais un changement d'état.
-    # `getattr` défensif : tant que bluestar.models.DeskSetup ne porte pas
-    # encore `entry_type` (cf. patch desk_parser en 3 paliers), retourne
-    # None et cette advisory ne se déclenche jamais — comportement
-    # strictement inchangé dans ce cas.
+    # X-9/G6 FIX : qualification explicite d'une entrée Market générée marché
+    # fermé — advisory non bloquante, jamais un changement d'état.
     entry_type = getattr(setup, "entry_type", None)
     if now is not None and entry_type == "Market" and _is_fx_market_closed(now):
         advisories = advisories + (
@@ -621,13 +542,11 @@ def _decide_setup_core(
 
     conflicting_legs = [leg for leg in leg_echoes if leg.verdict == LegVerdict.CONFLIT]
     if conflicting_legs:
-        # PATCH-C05 (round du 31/07/2026, audit C-05/F-12) : l'ancienne version
-        # ne retenait que le PREMIER CONFLIT — un setup dont les deux jambes sont
-        # en capitulation (ex. EUR 10 / CAD 8) n'en citait qu'une, masquant au
-        # lecteur final que le squeeze pouvait se déclencher des deux côtés
-        # (symétrie avec _build_setup_positioning côté macro, qui gère déjà le
-        # cas "DEUX jambes extrêmes"). Le cas mono-conflit produit une chaîne
-        # strictement identique à avant ce patch.
+        # PATCH-C05 (audit C-05/F-12) : l'ancienne version ne retenait que le
+        # PREMIER conflit — un setup dont les deux jambes sont en capitulation
+        # n'en citait qu'une, masquant que le squeeze pouvait se déclencher des
+        # deux côtés. Le cas mono-conflit produit une chaîne strictement
+        # identique à avant ce patch.
         if len(conflicting_legs) == 1:
             limiting = (f"conflit de positionnement sur la jambe "
                         f"{conflicting_legs[0].currency} ({conflicting_legs[0].detail})")
@@ -656,7 +575,6 @@ def _decide_setup_core(
             legs=leg_echoes, limiting_factor="—", advisories=advisories,
         )
 
-    # Aucune jambe en confluence, aucune en conflit -> tout au plus neutre/indéterminé
     return Decision(
         pair=setup.pair, direction=setup.direction, state=DecisionState.WATCH,
         legs=leg_echoes, limiting_factor="aucune confluence macro positive sur les deux jambes",
@@ -665,29 +583,15 @@ def _decide_setup_core(
 
 
 def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) -> Decision:
-    """PATCH-F6BIS (audit round 2, GLM-5.2, 31/07/2026) : fait apparaître les
-    flags Desk de sévérité "major" (C1-C10, cf. `_extract_flags` côté
-    parser) dans le `limiting_factor` affiché au Comité, pour que celui-ci
-    reflète la vérité de la couche technique (cf. audit §10 : "la fonction
-    decide_setup doit inspecter setup.flags [...] écraser ou compléter le
-    limiting_factor").
+    """PATCH-F6BIS : fait apparaître les flags Desk (C1-C10) dans le
+    `limiting_factor` affiché au Comité, pour que celui-ci reflète la vérité de
+    la couche technique.
 
     Garanties de non-régression :
-    - `getattr(setup, "flags", ())` : si `DeskSetup` ne porte pas encore ce
-      champ (schéma exact non démontrable depuis ce corpus — cf. commentaire
-      dans `comite_final_desk_parser._parse_setup`), on obtient `()` et la
-      fonction retourne `decision` INCHANGÉE. Zéro comportement nouveau tant
-      que le champ n'existe pas réellement sur l'objet.
-    - Un setup sans flags, ou avec uniquement des flags "minor", ressort
-      avec un `Decision` strictement identique à avant ce patch (même
-      `limiting_factor`, même `state`) — seule l'apparition d'au moins un
-      flag "major" change la sortie, et uniquement le texte du
-      `limiting_factor` (jamais le `state`, qui reste sous la seule autorité
-      de `_decide_setup_core`, conformément à la demande de l'audit de
-      COMPLÉTER l'affichage plutôt que de changer la décision).
-    - Idempotent : si le texte du/des flag(s) majeur(s) figure déjà dans le
-      `limiting_factor` (ex: si une future version de `_decide_setup_core`
-      venait à les citer elle-même), rien n'est dupliqué.
+    - `getattr(setup, "flags", ())` : si `DeskSetup` ne porte pas ce champ, on
+      obtient `()` et la fonction retourne `decision` INCHANGÉE ;
+    - un setup sans flags ressort avec un `Decision` strictement identique ;
+    - seul le TEXTE du `limiting_factor` change, jamais le `state`.
     """
     flags = getattr(setup, "flags", ())
     if not flags:
@@ -710,79 +614,52 @@ def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) ->
         if sev == "major":
             major_parts.append(txt)
         elif sev == "minor":
-            # V4-07 : aussi afficher les flags mineurs pour visibilité
+            # V4-07 : afficher aussi les flags mineurs pour visibilité.
             minor_parts.append(txt)
 
-    # Réserver la priorité aux majors, mais ajouter les mineurs si présents
     flag_text = "; ".join(major_parts + minor_parts)
     if not flag_text:
         return decision
 
-    # Nettoyer le texte existant de la décision
     clean_lf = decision.limiting_factor
     if "[flags desk majeurs :" in clean_lf:
-        # Récupérer les flags existants pour les réintégrer
-        import re
-        match = re.search(r'\[flags desk majeurs : ([^\]]+)\]', clean_lf)
+        match = re.search(r"\[flags desk majeurs : ([^\]]+)\]", clean_lf)
         if match:
             existing_flags = match.group(1)
             if existing_flags not in flag_text:
                 flag_text = existing_flags + "; " + flag_text
             clean_lf = clean_lf.replace(match.group(0), "")
     elif "[flags desk" in clean_lf:
-        clean_lf = re.sub(r'\[flags desk [^\]]+\]', '', clean_lf)
+        clean_lf = re.sub(r"\[flags desk [^\]]+\]", "", clean_lf)
 
-    return replace(
-        decision,
-        limiting_factor=clean_lf + f" [flags desk : {flag_text}]",
-    )
+    return replace(decision, limiting_factor=clean_lf + f" [flags desk : {flag_text}]")
 
 
 def _augment_limiting_factor_with_cap_reason(decision: Decision, setup: DeskSetup) -> Decision:
-    """PATCH-CAPREASON (Proposition 1, ICF v2 — rapport de synergie du
-    03/08/2026, C-05). Fait apparaître le plafond de conviction motivé par
-    le Desk (`.cap-note`, cf. `_extract_cap_reason` côté parser) dans le
-    `limiting_factor` affiché au Comité.
+    """ICF v2, Proposition 1 — surface le motif de plafond de conviction posé
+    par la couche technique (`<div class="cap-note">` côté Desk).
 
-    Constat qui motive ce patch : sur le cycle du 03/08/2026, les 3 setups
-    publiés par le Desk (EUR/CAD, GBP/AUD, AUD/CHF — dont l'unique
-    ELIGIBLE) sont TOUS plafonnés ("risque macro NON ÉVALUÉ (couverture
-    calendaire insuffisante)") et le Comité affichait pourtant un facteur
-    limitant vide ou "—" pour GBP/AUD : le motif du plafond, déjà calculé
-    et rendu par la couche technique, était perdu à la frontière.
+    Constat qui motive ce patch : sur le cycle audité, les setups publiés sont
+    TOUS plafonnés par le Desk (« risque macro NON ÉVALUÉ », « risque
+    structurel critique (REVERSAL_RISK) ») et le Comité affichait pourtant un
+    facteur limitant qui n'en disait rien.
 
-    Garanties de non-régression, même patron que
-    `_augment_limiting_factor_with_flags` :
-    - `getattr(setup, "cap_reason", None)` : si `DeskSetup` ne porte pas
-      encore ce champ, on obtient `None` et la fonction retourne `decision`
-      INCHANGÉE. Zéro comportement nouveau tant que le champ n'existe pas
-      réellement sur l'objet.
-    - Un setup non plafonné (`cap_reason is None`) ressort avec un
-      `Decision` strictement identique à avant ce patch (même
-      `limiting_factor`, même `state`) — seule la présence d'un plafond
-      motivé change la sortie, et uniquement le texte du `limiting_factor`
-      (jamais le `state`, qui reste sous la seule autorité de
-      `_decide_setup_core` : ce patch DIVULGUE un plafond déjà appliqué en
-      amont par le Desk, il n'en applique aucun nouveau côté Comité).
-    - Idempotent : si le texte du plafond figure déjà dans le
-      `limiting_factor`, rien n'est dupliqué.
-    """
+    Garanties :
+    - `getattr(setup, "cap_reason", None)` : champ absent ou setup non
+      plafonné -> `decision` retournée INCHANGÉE ;
+    - modifie UNIQUEMENT le texte du `limiting_factor`, jamais le `state` ;
+    - idempotent (garde de sous-chaîne) ;
+    - AUCUN double comptage : le plafond est déjà reflété dans le grade de
+      conviction produit par le Desk ; on divulgue le MOTIF, on ne repénalise
+      rien."""
     cap_reason = getattr(setup, "cap_reason", None)
     if not cap_reason:
         return decision
-
-    clean_lf = decision.limiting_factor
-    if cap_reason in clean_lf:
+    if cap_reason in decision.limiting_factor:
         return decision
-
-    # Le placeholder "—" (aucun facteur limitant) n'a plus lieu d'être une
-    # fois qu'un plafond motivé est connu : on le remplace plutôt que de
-    # produire "— [plafond desk : ...]", qui lirait comme une contradiction.
-    base = "" if clean_lf.strip() == "—" else clean_lf
-
     return replace(
         decision,
-        limiting_factor=(base + f" [plafond desk : {cap_reason}]").strip(),
+        limiting_factor=f"{decision.limiting_factor} [cap desk : {cap_reason}]",
     )
 
 
@@ -790,27 +667,21 @@ def decide_setup(
     setup: DeskSetup, macro: MacroSnapshot,
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
     now: datetime | None = None,
-    calendar_coverage: Mapping[str, frozenset[str]] = types.MappingProxyType({}),
+    uncovered_currencies: frozenset[str] = frozenset(),
 ) -> Decision:
-    """Point d'entrée public, comportement inchangé pour tout appelant
-    existant (même signature élargie d'un seul paramètre optionnel `now`,
-    défaut None -- cf. `_decide_setup_core` pour X-9/G6 -- puis d'un second
-    paramètre optionnel `calendar_coverage`, défaut mapping vide -- cf.
-    Proposition 1 ICF v2 pour le fil de transmission) -- voir
-    `_decide_setup_core` pour la logique de décision elle-même et
-    `_augment_limiting_factor_with_flags` pour le correctif F6-BIS (câblage
-    des flags Desk C1-C10 majeurs dans le limiting_factor affiché au
-    Comité)."""
-    decision = _decide_setup_core(setup, macro, correlation_groups, now=now,
-                                  calendar_coverage=calendar_coverage)
+    """Point d'entrée public. Signature élargie de deux paramètres OPTIONNELS
+    (`now`, `uncovered_currencies`) : tout appelant existant obtient un
+    comportement inchangé.
+
+    Voir `_decide_setup_core` pour la logique de décision elle-même, et les
+    trois `_augment_*` / advisories ci-dessous pour les enrichissements
+    d'affichage, dont aucun ne modifie `state`."""
+    decision = _decide_setup_core(setup, macro, correlation_groups, now=now)
     decision = _augment_limiting_factor_with_flags(decision, setup)
     decision = _augment_limiting_factor_with_cap_reason(decision, setup)
-    # PATCH-CALSTATUS (round du 31/07/2026, audit F-05/C-04) : le statut
-    # calendaire par setup (OK/PROXIMITY/WATCH), rendu par le Desk dans
-    # `.cal-row` mais jamais extrait avant le patch parser associé, est
-    # surfacé ici en advisory NON bloquant. `getattr` défensif : tant que
-    # DeskSetup ne porte pas le champ (schéma avant patch models.py B-1),
-    # la sortie est strictement identique à avant.
+
+    # PATCH-CALSTATUS (audit F-05/C-04) : statut calendaire par setup, surfacé
+    # en advisory NON bloquant. `getattr` défensif.
     cal_status = getattr(setup, "cal_status", None)
     if cal_status in _CAL_STATUS_ADVISORY:
         cal_note = getattr(setup, "cal_note", "") or ""
@@ -822,6 +693,12 @@ def decide_setup(
                 + " — non bloquant ici, à arbitrer avant toute action sur ce setup",
             ),
         )
+
+    # ICF v2, Proposition 2 : couverture calendaire par jambe.
+    cov = calendar_coverage_advisories(setup.pair, uncovered_currencies)
+    if cov:
+        decision = replace(decision, advisories=decision.advisories + cov)
+
     return decision
 
 
@@ -831,77 +708,36 @@ _REJECT_CODE_ROUTES: dict[str, tuple[DecisionState, str]] = {
     "RR_OUT_OF_RANGE": (DecisionState.REJECT, "risk_reward"),
     "PRICE_PAST_TP": (DecisionState.BLOCKED_DATA, "price"),
     "CLUSTER_DUP": (DecisionState.WATCH, "cluster"),
-    # --- Ajout round d'audit du 27/07/2026 (lecture directe de ENGINE.V9.py) ---
-    # Ces 6 codes existent réellement dans le moteur (GateCode + preflight)
-    # mais n'étaient routés nulle part avant ce correctif : ils tombaient dans
-    # le repli générique (REJECT, "reject_code_inconnu"), un état arbitraire
-    # pour des cas qui ne sont pas tous de même nature.
+    # --- Ajout round du 27/07/2026 (lecture directe de ENGINE.V9.py) ---
     "CAL_BLACKOUT": (DecisionState.BLOCKED_DATA, "calendar"),
-    # Suspension temporaire liée au calendrier macro, pas un jugement
-    # technique définitif — le moteur lui-même la traite à part de ses vrais
-    # rejets (bloc "SUSPENDUS", distinct du tableau "REJETS" dans son propre
-    # template). BLOCKED_DATA reflète ce même distinguo côté comité, plutôt
-    # que le REJECT générique qui gommerait la différence.
+    # Suspension temporaire liée au calendrier macro, pas un jugement technique
+    # définitif — le moteur lui-même la traite à part de ses vrais rejets.
     "SCHEMA_ASSET_ERROR": (DecisionState.BLOCKED_DATA, "integrity"),
-    # Anomalie d'intégrité des données en amont (MTF manquant) — pas un
-    # jugement sur le setup lui-même.
     "NO_ATR": (DecisionState.BLOCKED_DATA, "missing_data"),
-    # Donnée technique requise absente (ATR ≤ 0) — même logique que
-    # SCHEMA_ASSET_ERROR : donnée manquante, pas actif jugé et écarté.
     "NO_DIRECTION": (DecisionState.REJECT, "no_direction"),
-    # Consensus MTF neutre : un vrai jugement technique ("pas de direction
-    # exploitable"), donc REJECT au même titre que LOW_QUALITY.
     "LOW_CONSENSUS": (DecisionState.REJECT, "consensus"),
-    # Même famille que LOW_QUALITY/LOW_CONVICTION : seuil technique non
-    # atteint, jugement définitif pour ce cycle.
     "SL_SIGN": (DecisionState.BLOCKED_DATA, "computation_error"),
-    # Anomalie de calcul interne (stop-loss du mauvais côté de l'entrée) —
-    # signale un problème de génération du setup, pas un jugement de marché.
-    # --- PATCH-CLUSTERDUP (round du 31/07/2026) ---
-    # Nouveaux codes émis par v10.py après correction de diversify() (même
-    # round). AVANT ce patch, exposition-devise, corrélation et dépassement
-    # de MAX_SETUPS tombaient tous sous l'étiquette CLUSTER_DUP (faux :
-    # aucun des trois n'est un doublon de cluster). Même état WATCH que
-    # CLUSTER_DUP par cohérence : dans les quatre cas, ce n'est pas une
-    # faute du setup lui-même, c'est une contrainte de construction de
-    # portefeuille (exposition, corrélation, capacité), pas un jugement
-    # technique définitif comme LOW_QUALITY/NO_DIRECTION.
-    #
+    # --- PATCH-CLUSTERDUP (31/07/2026) ---
+    # Contraintes de construction de portefeuille (exposition, corrélation,
+    # capacité), pas un jugement technique définitif -> WATCH, comme CLUSTER_DUP.
     # DÉPLOIEMENT ATOMIQUE OBLIGATOIRE avec le patch v10.py correspondant.
-    # Vérifié par exécution (round du 31/07/2026) : si v10.py émet ces
-    # codes sans que cette table soit mise à jour, decide_rejection()
-    # route vers le repli (DecisionState.REJECT, "reject_code_inconnu") —
-    # un setup simplement capé par une limite de portefeuille se
-    # retrouverait promu REJECT dur, une régression de sévérité pire que
-    # le bug d'origine (CLUSTER_DUP au moins routait déjà vers WATCH).
     "EXPOSURE_CAP": (DecisionState.WATCH, "exposure"),
     "CORRELATION_CAP": (DecisionState.WATCH, "correlation"),
     "MAX_SETUPS_REACHED": (DecisionState.WATCH, "capacity"),
 }
 
 
-def _macro_priority_conflict_for_rejected(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Optional[str]:
-    """Retourne un message si la paire/direction est priorisée par le macro dans un sens opposé.
-    
-    Utilisé par decide_rejection pour signaler les conflits macro non bloquants.
+def _macro_priority_conflict_for_rejected(
+    rejected: DeskRejectedSetup, macro: MacroSnapshot
+) -> str | None:
+    """Retourne un message si la paire/direction est priorisée par le macro dans
+    un sens opposé. Utilisé par decide_rejection pour signaler les conflits
+    macro non bloquants (garde-fou B-1).
 
-    R-14 FIX (round de validation zero-régression, 02/08/2026, MOYEN) :
-    comparaison normalisée (`_normalize_pair`), symétrique du correctif déjà
-    appliqué à `_macro_priority_conflict` ci-dessus — même raison (notation
-    d'indice Desk "DE30/EUR" vs notation Macro "DAX"), même correction,
-    pour que le garde-fou B-1 (conflit macro sur rejets) ne soit pas
-    lui-même aveugle aux indices alors que le correctif vient de fermer ce
-    trou côté setups valides.
-
-    CORRECTIF SUPPLÉMENTAIRE (02/08/2026, après confirmation du schéma réel
-    de bluestar/models.py) : `DeskRejectedSetup.direction` est typé
-    `Direction | None` — un rejet peut n'avoir AUCUNE direction connue (ex.
-    `CAL_BLACKOUT` détecté avant toute analyse directionnelle). Sans garde,
-    `rejected.direction.value.upper()` plus bas aurait levé `AttributeError`
-    sur `None`, faisant échouer `decide_rejection` pour CE rejet précis —
-    un défaut réel, pas une simple dégradation. On ne peut de toute façon
-    pas déclarer un "conflit frontal" sans connaître la direction du desk :
-    silencieux (None) dans ce cas."""
+    `DeskRejectedSetup.direction` est typé `Direction | None` — un rejet peut
+    n'avoir AUCUNE direction connue (ex. CAL_BLACKOUT détecté avant toute
+    analyse directionnelle). On ne peut pas déclarer un « conflit frontal »
+    sans connaître la direction du desk : silencieux (None) dans ce cas."""
     if rejected.direction is None:
         return None
     rejected_pair_norm = _normalize_pair(rejected.pair)
@@ -913,35 +749,17 @@ def _macro_priority_conflict_for_rejected(rejected: DeskRejectedSetup, macro: Ma
     return None
 
 
-def _reject_currency_ips_advisories(rejected: "DeskRejectedSetup", macro: MacroSnapshot) -> tuple[str, ...]:
-    """R-5 FIX (round de validation zero-régression, 02/08/2026, CRITIQUE).
+def _reject_currency_ips_advisories(
+    rejected: DeskRejectedSetup, macro: MacroSnapshot
+) -> tuple[str, ...]:
+    """R-5 FIX (02/08/2026) : l'alerte de positionnement extrême (IPS)
+    n'atteignait jamais le Comité quand TOUS les setups portant une jambe sur
+    la devise concernée étaient rejetés par le Desk avant la grille macro×IPS.
 
-    L'alerte de positionnement extrême (IPS) n'atteignait jamais le Comité
-    quand TOUS les setups portant une jambe sur la devise concernée étaient
-    rejetés par le Desk avant la grille macro×IPS — exactement le cas
-    confirmé par l'audit indépendant (rapport RUN-4, R-5) : USD en IPS 87
-    (crowded) ce cycle, mais chaque setup à jambe USD est soit
-    `CAL_BLACKOUT` soit rejeté techniquement, et `decide_rejection`
-    n'appelait jusqu'ici jamais `echo_leg` (cette fonction ne s'exécute que
-    pour les setups valides, dans `_decide_setup_core`).
-
-    Advisory NON bloquante, symétrique du mécanisme B-1 (conflit de
-    priorité macro sur les rejets) déjà en place ci-dessous : ne change
-    JAMAIS l'état du rejet ; rend seulement visible une zone IPS extrême
-    sur une devise que le Desk a écartée pour une tout autre raison.
-    Silencieux (tuple vide) pour tout instrument non pairé (pas de "/" dans
-    `rejected.pair`, ex. indices/commodités) et pour toute zone IPS non
-    extrême (NEUTRE/INDETERMINE).
-
-    CORRECTIF SUPPLÉMENTAIRE (02/08/2026, après confirmation du schéma réel
-    de bluestar/models.py) : `rejected.direction` peut être `None`. Sans
-    garde, les deux comparaisons `== Direction.LONG` / `== Direction.SHORT`
-    deviennent silencieusement `False` pour les DEUX devises, ce qui
-    revient à fabriquer une hypothèse de jambe ("aucune des deux n'est
-    longue") sans aucune base réelle — pas un crash, mais un jugement
-    CONFLIT/CONFLUENCE construit sur une prémisse inventée. Silencieux
-    (tuple vide) est le choix honnête ici, cohérent avec le traitement déjà
-    appliqué aux instruments non pairés juste au-dessus."""
+    Advisory NON bloquante, symétrique de B-1 : ne change JAMAIS l'état du
+    rejet. Silencieuse pour tout instrument non pairé et pour toute zone IPS
+    non extrême. Silencieuse aussi quand `direction is None` : sans direction,
+    juger CONFLIT/CONFLUENCE reviendrait à inventer une prémisse."""
     if rejected.direction is None:
         return ()
     if "/" not in rejected.pair:
@@ -965,27 +783,18 @@ def _reject_currency_ips_advisories(rejected: "DeskRejectedSetup", macro: MacroS
 def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decision:
     """Route un rejet desk vers une Decision.
 
-    Ces actifs ont deja ete ecartes par le desk technique pour une raison
-    purement technique (qualite, conviction, R:R, prix, doublon de
-    cluster) et n'ont jamais traverse la grille macro x IPS echo(leg), qui
-    ne s'applique qu'aux setups valides. decide_rejection() ne reevalue
-    donc pas ces setups au niveau macro ; il trace une decision motivee
-    pour chacun, ce qui ferme l'invariant 33/33.
-    
-    IMPORTANTE : B-1 — les conflits de priorité macro sur les rejets
-    (direction macro ≠ direction desk) sont signalés en advisory NON
-    bloquant — le rejet reste valide, mais le pistolage macro est visible."""
+    Ces actifs ont déjà été écartés par le desk technique pour une raison
+    purement technique et n'ont jamais traversé la grille macro × IPS
+    echo(leg), qui ne s'applique qu'aux setups valides. decide_rejection() ne
+    réévalue donc pas ces setups au niveau macro ; il trace une décision
+    motivée pour chacun, ce qui ferme l'invariant 33/33."""
     asset_class = classify_asset(rejected.pair)
-    
-    # B-1 : vérifier le conflit de priorité macro (advisory non bloquant)
-    macro_conflict = _macro_priority_conflict_for_rejected(rejected, macro)
 
-    # R-5 FIX : advisory de positionnement IPS extrême, symétrique de B-1
+    # B-1 : conflit de priorité macro (advisory non bloquant).
+    macro_conflict = _macro_priority_conflict_for_rejected(rejected, macro)
+    # R-5 : advisory de positionnement IPS extrême, symétrique de B-1.
     ips_advisories = _reject_currency_ips_advisories(rejected, macro)
-    
-    state, _leg_key = _REJECT_CODE_ROUTES.get(
-        rejected.reject_code, (DecisionState.REJECT, "reject_code_inconnu")
-    )
+
     state, _leg_key = _REJECT_CODE_ROUTES.get(
         rejected.reject_code, (DecisionState.REJECT, "reject_code_inconnu")
     )
@@ -1000,12 +809,9 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
             "cluster deja represente par un setup valide du desk — ce "
             "doublon n'est pas promu automatiquement en ELIGIBLE.",
         )
-    
-    # B-1 : ajouter l'advisory de conflit macro si pertinent
+
     if macro_conflict:
         advisories = advisories + (macro_conflict,)
-
-    # R-5 FIX : ajouter l'advisory de positionnement IPS extrême si pertinent
     advisories = advisories + ips_advisories
 
     return Decision(
@@ -1020,44 +826,159 @@ def decide_rejection(rejected: DeskRejectedSetup, macro: MacroSnapshot) -> Decis
     )
 
 
+# ---------------------------------------------------------------------------
+# DIAGNOSTICS DE SYNERGIE (ICF v2, Propositions 3 & 4)
+#
+# Fonctions PURES, hors du chemin `Decision`. Elles ne retournent aucune
+# `Decision`, ne sont appelées par aucune des fonctions `decide_*`, et sont
+# consommées uniquement par la couche de rendu / le logger. Par construction,
+# elles NE PEUVENT PAS modifier un état, un score ou un gate — c'est
+# l'exigence explicite de l'audit (Rejet interne : « injecter le Currency
+# Strength Ranking dans echo_leg ou dans un score » a été rejeté pour double
+# comptage avec F2/F6 côté Desk).
+# ---------------------------------------------------------------------------
+
+_THEME_RE = re.compile(r"^([A-Za-z]{3})\s+(Bullish|Bearish)$", re.IGNORECASE)
+
+
+def strength_theme_divergences(
+    desk: DeskSnapshot, macro: MacroSnapshot
+) -> tuple[StrengthThemeDivergence, ...]:
+    """ICF v2, Proposition 3 — Règle Absolue 4.
+
+    Deux applications mesurent la « force » d'une devise sous un vocabulaire
+    proche mais avec deux constructions différentes, sur deux horizons
+    différents :
+      - Macro : `Currency Strength Ranking`, momentum de PRIX D1 (Oanda) ;
+      - Desk  : `Thèmes`, biais STRUCTUREL issu du consensus multi-timeframe.
+
+    Les deux sont extraites par le Comité (coût de parsing déjà payé, contrat
+    de rupture dure côté Macro : 8 devises exigées) et ne se rencontraient
+    jamais. Cette fonction les JOINT et NOMME la divergence — elle ne l'arbitre
+    pas : une divergence n'est pas nécessairement une erreur, elle est souvent
+    le signe légitime d'un désaccord d'horizon (momentum court contre structure
+    longue), et c'est précisément pour cela qu'elle doit être exposée plutôt
+    qu'écrasée par un des deux camps.
+
+    Ne se déclenche que sur une divergence FRANCHE (cf. STRENGTH_STRONG_MIN /
+    STRENGTH_WEAK_MAX) ; la zone intermédiaire ne produit rien. Silencieuse si
+    les thèmes ou les scores de force sont indisponibles."""
+    out: list[StrengthThemeDivergence] = []
+    for raw in getattr(desk, "themes", ()) or ():
+        m = _THEME_RE.match(str(raw).strip())
+        if not m:
+            continue
+        ccy = m.group(1).upper()
+        theme = m.group(2).capitalize()
+        data = macro.currencies.get(ccy)
+        if data is None or data.strength_score is None:
+            continue
+        score = float(data.strength_score)
+        rank = data.strength_rank
+
+        if theme == "Bullish" and score <= STRENGTH_WEAK_MAX:
+            sense = "faible"
+        elif theme == "Bearish" and score >= STRENGTH_STRONG_MIN:
+            sense = "forte"
+        else:
+            continue
+
+        rank_txt = f", rang {rank}/8" if rank is not None else ""
+        out.append(StrengthThemeDivergence(
+            currency=ccy,
+            macro_strength_score=score,
+            macro_strength_rank=rank,
+            desk_theme=theme,
+            detail=(
+                f"{ccy} — momentum prix D1 [Macro/Oanda] : {score:.0f}/100 ({sense}{rank_txt}) "
+                f"vs biais structurel MTF [Desk] : {theme}. Deux mesures DIFFÉRENTES sur deux "
+                f"horizons différents, pas deux avis sur la même chose : une divergence n'est "
+                f"pas nécessairement une erreur. Signalée, jamais arbitrée — aucun état, aucun "
+                f"score, aucun gate n'en dépend."
+            ),
+        ))
+    return tuple(out)
+
+
+def macro_priority_intersection_status(
+    desk: DeskSnapshot, macro: MacroSnapshot
+) -> str | None:
+    """ICF v2, Proposition 4 — étend le garde-fou B-4.
+
+    B-4 couvre le cas « canal macro vide » (aucune thèse directionnelle). Il ne
+    couvre PAS le cas « canal macro non vide mais DISJOINT » : des priorités
+    macro existent, mais aucune ne porte sur un setup validé par le desk. Ce
+    second cas est strictement plus trompeur, puisque le rapport affiche
+    « Macro : ACTIF » et « aucun conflit frontal détecté » — alors qu'aucun
+    conflit frontal n'était POSSIBLE par construction.
+
+    Retourne None (silencieux) si le canal est vide (déjà couvert par B-4) ou
+    si l'intersection est non vide (le garde-fou de conflit a réellement pu
+    s'exercer)."""
+    if not macro.priority_setups:
+        return None  # cas déjà couvert et déclaré par B-4
+    desk_pairs = {_normalize_pair(s.pair) for s in desk.setups}
+    macro_pairs = {_normalize_pair(p.pair) for p in macro.priority_setups}
+    if desk_pairs & macro_pairs:
+        return None
+    macro_lbl = ", ".join(
+        f"{p.pair} {p.direction.value.upper()} ({p.conviction_stars}★)"
+        for p in macro.priority_setups
+    ) or "—"
+    desk_lbl = ", ".join(sorted(s.pair for s in desk.setups)) or "aucun"
+    return (
+        f"canal macro ACTIF mais DISJOINT du desk : priorités macro [{macro_lbl}] ; "
+        f"setups validés par le desk [{desk_lbl}] — intersection VIDE. Aucun conflit "
+        f"frontal macro×desk n'était possible par construction sur ce cycle : "
+        f"« aucun conflit détecté sur les setups validés » ne signifie donc PAS "
+        f"« accord macro×desk »."
+    )
+
+
 def decide_all(
     desk: DeskSnapshot, macro: MacroSnapshot, *, include_rejects: bool = True,
     now: datetime | None = None,
 ) -> tuple[Decision, ...]:
-    """Applique decide_setup a tous les setups valides du desk et, par
-    defaut, decide_rejection a tous les rejets desk — invariant souverain
-    (len(desk.setups) + len(desk.rejected) == desk.universe_total decisions).
+    """Applique decide_setup à tous les setups valides du desk et, par défaut,
+    decide_rejection à tous les rejets desk — invariant souverain
+    (len(desk.setups) + len(desk.rejected) == desk.universe_total décisions).
 
-    include_rejects=False restaure l'ancien comportement (setups valides
-    seuls) pour compatibilite explicite, opt-in — jamais le defaut
-    silencieux.
+    include_rejects=False restaure l'ancien comportement (setups valides seuls)
+    pour compatibilité explicite, opt-in — jamais le défaut silencieux.
 
-    now=None (defaut) preserve la purete de la fonction pour les golden
-    files : la garde de fraicheur documentaire (audit B-2) ne s'active que
-    si l'appelant fournit explicitement l'horloge (cf. cli.py)."""
-    # PATCH-B4 (round du 31/07/2026, audit F-03/B-4) : quand le canal
-    # directionnel macro est vide, le garde-fou _macro_priority_conflict et
-    # le producteur currency_level_advisories sont structurellement inertes
-    # — "Advisories : aucun" signifie alors "aucune these macro n'existait",
-    # pas "aucun conflit macro". Doit etre declare dans le rapport final.
+    now=None (défaut) préserve la pureté de la fonction pour les golden files :
+    la garde de fraîcheur documentaire (audit B-2) ne s'active que si
+    l'appelant fournit explicitement l'horloge (cf. cli.py)."""
+    # PATCH-B4 (audit F-03/B-4) : quand le canal directionnel macro est vide,
+    # _macro_priority_conflict et currency_level_advisories sont structurellement
+    # inertes — « Advisories : aucun » signifie alors « aucune thèse macro
+    # n'existait », pas « aucun conflit macro ».
     if not macro.priority_setups:
         logger.warning(
             "macro_priority_setups_empty — canal directionnel macro INERTE ce cycle : "
             "garde _macro_priority_conflict et advisories currency-level desactives. "
             "Le rapport final doit le declarer (audit B-4)."
         )
+    else:
+        # ICF v2, Proposition 4 : le cas « actif mais disjoint », non couvert par B-4.
+        _inter = macro_priority_intersection_status(desk, macro)
+        if _inter:
+            logger.warning("macro_priority_intersection_empty — %s", _inter)
+
+    uncovered = frozenset(getattr(desk, "calendar_coverage", {}).get("uncovered", frozenset()))
+    if uncovered:
+        logger.info(
+            "calendar_coverage_uncovered currencies=%s — advisory par jambe active",
+            sorted(uncovered),
+        )
 
     decisions = [
-        decide_setup(
-            s, macro, desk.correlation_groups, now=now,
-            calendar_coverage=getattr(desk, "calendar_coverage", types.MappingProxyType({})),
-        )
+        decide_setup(s, macro, desk.correlation_groups, now=now, uncovered_currencies=uncovered)
         for s in desk.setups
     ]
 
-    # PATCH-FRESHNESS (round du 31/07/2026, audit B-2/F-04) : un document
-    # desk perime ne doit plus pouvoir produire des decisions setups sans
-    # marquage. Opt-in via now= pour preserver la purete/golden files.
+    # PATCH-FRESHNESS (audit B-2/F-04) : un document desk périmé ne doit plus
+    # pouvoir produire des décisions setups sans marquage. Opt-in via now=.
     if now is not None:
         desk_dt = _desk_doc_datetime(desk)
         if desk_dt is None:
@@ -1083,11 +1004,9 @@ def decide_all(
 
     if include_rejects:
         rej = [decide_rejection(r, macro) for r in desk.rejected]
-        # PATCH-CLUSTERDUP-XREF (round du 31/07/2026, audit C-12) : un
-        # doublon deduplique par le Desk reapparaissait en WATCH au meme
-        # niveau visuel que son representant, sans que le lecteur puisse
-        # voir que les deux coexistent. Advisory de contre-reference,
-        # sans changement d'etat (zero-regression golden files).
+        # PATCH-CLUSTERDUP-XREF (audit C-12) : un doublon dédupliqué par le Desk
+        # réapparaissait en WATCH au même niveau visuel que son représentant.
+        # Advisory de contre-référence, sans changement d'état.
         rep_states = {d.pair: d.state.value for d in decisions}
         for i, r in enumerate(desk.rejected):
             if r.reject_code != "CLUSTER_DUP":
@@ -1100,6 +1019,7 @@ def decide_all(
                     f"ne pas le reintroduire manuellement au meme niveau de priorite",
                 ))
         decisions.extend(rej)
+
     decisions_t = tuple(decisions)
     counts = Counter(d.state.value for d in decisions_t)
     logger.info("decisions_computed grid_version=%s total=%d states=%s include_rejects=%s",
