@@ -20,17 +20,15 @@ logger = logging.getLogger("bluestar.extract.desk")
 # auditer AVANT de décider, sans importer la couche décision.
 MAX_DESK_DOC_AGE_H = 3.0  # NON CALIBRÉ — même commentaire que côté decide.
 
-# Décalages horaires nommés acceptés dans le bandeau desk. Le parser de date
-# (_parse_report_datetime) accepte déjà "GMT±N", "UTC", "CET" et "CEST" ; cette
-# table est la contrepartie numérique utilisée par l'audit de fraîcheur.
+# Décalages horaires nommés acceptés dans le bandeau desk.
 _TZ_NAMED_OFFSETS = {"UTC": 0, "GMT": 0, "CET": 1, "CEST": 2}
 
 
 def audit_document_freshness(desk: DeskSnapshot, now: datetime | None = None) -> str | None:
     """Retourne un message d'alerte si le document desk est périmé ou non
     datable, None sinon. Destiné à cli.py : le message DOIT figurer dans le
-    rapport final (le Comité était la seule couche sans section d'intégrité).
-    Jamais d'exception : un doute sur la fraîcheur est un constat, pas un crash."""
+    rapport final. Jamais d'exception : un doute sur la fraîcheur est un
+    constat, pas un crash."""
     now = now or datetime.now(timezone.utc)
     try:
         dt_naive = datetime.strptime(desk.report_datetime, "%Y-%m-%d %H:%M")
@@ -55,18 +53,9 @@ def audit_document_freshness(desk: DeskSnapshot, now: datetime | None = None) ->
 
 
 def _safe_float(raw_text: str, *, field: str, pair: str) -> float:
-    """
-    Cast float() défensif — lève DeskDocumentError (code CLI 2) au lieu de
+    """Cast float() défensif — lève DeskDocumentError (code CLI 2) au lieu de
     laisser fuiter ValueError (rattrapée par le filet générique de cli.py et
-    catégorisée en code 5, "erreur inattendue").
-
-    Correction du round d'audit du 20/07/2026 (trouvé par l'audit Gemini Pro,
-    confirmé par exécution : injecter "N/A" dans le champ R:R d'un setup
-    provoque exactement ce comportement avant correction). C'est la
-    troisième occurrence du même défaut de fond (après le .pair manquant du
-    round 2.1.1) — traité ici systématiquement pour tous les champs de prix
-    du bloc px-grid, pas au cas par cas.
-    """
+    catégorisée en code 5, "erreur inattendue")."""
     try:
         return float(raw_text)
     except ValueError as exc:
@@ -101,90 +90,80 @@ def _parse_event_risk(soup: BeautifulSoup) -> str:
     return m.group(1) if m else "non disponible dans les documents fournis"
 
 
+# ICF v2 (04/08/2026), mitigation C-9 LIMITÉE AU PARSER DESK.
+# Les documents desk observés arrivent parfois avec les caractères non-ASCII
+# supprimés ("Rgime", "Thmes", "valids"). Les regex ci-dessous rendent
+# l'accent OPTIONNEL : `R[eé]?gime` matche "Régime", "Regime" ET "Rgime".
+# C'est STRICTEMENT plus permissif — aucun document qui matchait avant ne
+# cesse de matcher. Volontairement NON appliqué à macro_parser._parse_regime,
+# qui relève d'une décision de gouvernance distincte (cf. audit C-9/F9).
+_RE_DESK_REGIME = re.compile(r"R[eé]?gime\s*:\s*(.+)")
+_RE_DESK_THEMES = re.compile(r"Th[eè]?mes\s*:\s*(.+)")
+
+
 def _parse_macro_regime_label(soup: BeautifulSoup) -> str | None:
-    """PATCH-DUALREGIME (Proposition 6, ICF v2 — rapport de synergie du
-    03/08/2026, Règle Absolue 4). Le bandeau Desk (.page-subbar) porte son
-    propre "Régime : X" (ex: POST_POLICY_REPRICING — état calendaire,
-    dérivé de la fenêtre d'événements macro autour du cycle), totalement
-    distinct du "Régime «Y»" du Macro Briefing (ex: Mixed / Selective —
-    état de marché, issu d'un vote multi-facteur). Les deux portent le même
-    mot "régime" pour deux constructions différentes ; avant ce patch, le
-    Comité n'affichait que celui du Macro, sous une étiquette qui laissait
-    croire à une source unique.
+    """PATCH-DUALREGIME (ICF v2, Proposition 6 — Règle Absolue 4). Le bandeau
+    Desk (.page-subbar) porte son propre "Régime : X" (ex: EVENT_DRIFT — état
+    CALENDAIRE, dérivé de la fenêtre d'événements macro autour du cycle),
+    totalement distinct du "Régime « Y »" du Macro Briefing (ex: Mixed /
+    Selective — état de MARCHÉ, issu d'un vote multi-facteur). Les deux
+    portent le même mot "régime" pour deux constructions différentes ; avant
+    ce patch, le Comité n'affichait que celui du Macro, sous une étiquette
+    qui laissait croire à une source unique.
 
-    Ce patch ne fait QUE divulguer -- aucune décision, aucun état, aucun
-    gate ne dépend de ce champ (cf. Rejets Internes du rapport de synergie
-    : injecter la force macro dans un score serait un double comptage ;
-    même logique ici, on affiche, on n'arbitre pas).
+    Ce patch ne fait QUE divulguer — aucune décision, aucun état, aucun gate
+    ne dépend de ce champ.
 
-    Patron d'extraction : span-frère indépendant (PATCH-THEMES-BLEED,
-    même raison -- ne jamais ancrer sur le texte aplati du bandeau, un
-    badge intercalé pourrait fuiter dans le régime comme il fuitait dans
-    les thèmes avant le 31/07/2026). Regex tolérante à l'accent (ancrage
-    C-9 du rapport de synergie : `macro_parser._parse_regime` échoue
-    silencieusement sur un document sans accents -- on ne reproduit pas
-    cette fragilité ici)."""
+    Patron d'extraction : span-frère indépendant (même raison que
+    PATCH-THEMES-BLEED — ne jamais ancrer sur le texte aplati du bandeau, un
+    badge intercalé pourrait fuiter)."""
     subbar = soup.find(class_="page-subbar")
     if subbar is None:
         return None
     for span in subbar.find_all("span", recursive=False):
         text = span.get_text(" ", strip=True)
-        m = re.match(r"R[eé]gime\s*:\s*(.+)", text)
+        m = _RE_DESK_REGIME.match(text)
         if m:
             return m.group(1).strip()
     return None
 
 
 def _parse_themes(soup: BeautifulSoup) -> tuple[str, ...]:
-    """PATCH-THEMES-BLEED (round du 31/07/2026) : l'ancienne version regexait
-    le texte aplati de tout le page-subbar avec une frontière
-    "(?:CONFIDENTIEL|$)" -- si un badge (ex. "SR indisponible · mode ATR")
-    s'intercalait entre le span Thèmes et le span CONFIDENTIEL, il était
-    absorbé dans le dernier thème. Confirmé par exécution sur le rapport du
-    29/07/2026 : le thème NZD devenait "NZD Bearish SR indisponible · mode
-    ATR" au lieu de "NZD Bearish".
+    """PATCH-THEMES-BLEED (31/07/2026) : l'ancienne version regexait le texte
+    aplati de tout le page-subbar — si un badge s'intercalait entre le span
+    Thèmes et le span CONFIDENTIEL, il était absorbé dans le dernier thème.
 
-    Correctif : chaque bloc du bandeau est un <span> FRÈRE indépendant dans
-    le template (jamais imbriqué) -- on ancre donc sur le span lui-même
-    plutôt que sur le texte aplati du conteneur. Un badge futur ajouté entre
-    Thèmes et CONFIDENTIEL ne peut plus fuiter, quel que soit son contenu.
-    Testé avec/sans badge SR, avec/sans thèmes présents — comportement
-    identique à l'ancienne version dans les deux cas où elle était correcte,
-    corrigé dans le cas où elle ne l'était pas."""
+    Correctif : chaque bloc du bandeau est un <span> FRÈRE indépendant dans le
+    template (jamais imbriqué) — on ancre donc sur le span lui-même plutôt que
+    sur le texte aplati du conteneur.
+
+    ICF v2 : regex rendue tolérante à l'accent manquant (cf. _RE_DESK_THEMES).
+    Sans cela, sur un document dont les accents ont été perdus en transport,
+    `themes` valait () — et le diagnostic Force↔Thème (Proposition 3) était
+    mort silencieusement."""
     subbar = soup.find(class_="page-subbar")
     if subbar is None:
         return ()
     for span in subbar.find_all("span", recursive=False):
         text = span.get_text(" ", strip=True)
-        m = re.match(r"Th[eè]mes\s*:\s*(.+)", text)
+        m = _RE_DESK_THEMES.match(text)
         if m:
             return tuple(t.strip() for t in m.group(1).split(",") if t.strip())
     return ()
 
 
 def _parse_banners(soup: BeautifulSoup) -> tuple[str, ...]:
-    """K-3/R-3/G4 FIX (round de validation zero-régression, 02/08/2026).
-
-    Le moteur Desk (ENGINE_V9.py) émet un `<div class="banner">` par alerte
-    document-niveau -- ALERTE FUSEAU (incohérence calendaire intraday) et
-    COUVERTURE CALENDRIER TRONQUÉE (flux hebdomadaire raccourci, cf.
-    `cal_feed_truncated`/`cal_time_degraded` du template Desk). Ces
-    bannières existent bel et bien dans le HTML produit, mais aucune
-    fonction du parser Comité ne les extrayait avant ce correctif : leur
-    contenu n'atteignait jamais le rapport final (audit K-3/R-3/O-2).
-    Champ optionnel : un cycle sans alerte n'a légitimement aucun `.banner`,
-    et le résultat est alors un tuple vide, comme avant ce correctif."""
+    """K-3/R-3/G4 FIX (02/08/2026). Le moteur Desk émet un
+    `<div class="banner">` par alerte document-niveau (fuseau incohérent,
+    couverture calendrier tronquée). Champ optionnel : un cycle sans alerte
+    n'a légitimement aucun `.banner`, et le résultat est alors un tuple vide."""
     return tuple(b.get_text(" ", strip=True) for b in soup.find_all(class_="banner"))
-
-
-_FACTOR_LABEL_RE = re.compile(r"^(F\d|Q-rang)")
 
 
 def _extract_pair(block: Tag) -> str:
     """Champ obligatoire : un bloc .setup sans .pair est un document desk
     malformé (DeskDocumentError, code CLI 2), pas une anomalie interne
-    imprévue (code CLI 5). Distinction ajoutée lors du round d'audit du
-    19/07/2026 (trouvé par l'audit GLM, confirmé par exécution)."""
+    imprévue (code CLI 5)."""
     pair_tag = block.find(class_="pair")
     if pair_tag is None:
         raise DeskDocumentError(
@@ -195,27 +174,9 @@ def _extract_pair(block: Tag) -> str:
 
 
 def _extract_direction(block: Tag, pair: str) -> Direction:
-    """
-    Champ obligatoire (même justification que _extract_pair) — ET validé
-    explicitement depuis le round d'audit du 21/07/2026.
-
-    AVANT ce correctif : `Direction.LONG if "long" in classes else
-    Direction.SHORT` — toute classe .dir ne contenant pas "long" (y compris
-    une valeur invalide, ex. "neutral", une faute de frappe, un export
-    corrompu) devenait silencieusement SHORT. Un document desk malformé
-    produisait un rapport valide, un code CLI 0 ou 6, avec une direction
-    potentiellement inversée par rapport à l'intention réelle du document —
-    corruption sémantique silencieuse, pas une exception. Trouvé par un
-    audit qui a spécifiquement testé une classe .dir présente mais invalide
-    (les rounds précédents ne testaient que .dir ABSENT, jamais .dir
-    invalide) ; confirmé par exécution avant correction.
-
-    Seules "long" et "short" sont des classes valides dans le système réel
-    (confirmé par inspection du HTML source de production : aucune autre
-    valeur de classe direction n'existe). Toute autre valeur est maintenant
-    un document malformé (DeskDocumentError, code CLI 2), jamais un fallback
-    silencieux.
-    """
+    """Champ obligatoire ET validé explicitement (round du 21/07/2026).
+    Seules "long" et "short" sont des classes valides ; toute autre valeur est
+    un document malformé, jamais un fallback silencieux."""
     dir_tag = block.find(class_="dir")
     if dir_tag is None:
         raise DeskDocumentError(
@@ -235,8 +196,7 @@ def _extract_direction(block: Tag, pair: str) -> Direction:
 
 
 def _extract_conviction(block: Tag, pair: str) -> tuple[str, float]:
-    """Champ obligatoire, même justification que _extract_pair. Retourne
-    (grade, valeur) — ex: ("BBB", 0.77)."""
+    """Champ obligatoire. Retourne (grade, valeur) — ex: ("BBB", 0.77)."""
     conv_tag = block.find(class_="conv")
     if conv_tag is None:
         raise DeskDocumentError(
@@ -256,35 +216,44 @@ def _extract_cluster(block: Tag) -> str:
 
 
 def _extract_cap_reason(block: Tag) -> str | None:
-    """PATCH-CAPREASON (Proposition 1, ICF v2 — audit C-05/rapport de
-    synergie du 03/08/2026). Le moteur Desk rend `<div class="cap-note">
-    {message}</div>` quand un plafond de conviction est appliqué (ex:
-    "Plafond conviction appliqué : risque macro NON ÉVALUÉ (couverture
-    calendaire insuffisante) — cap prudentiel") -- mais aucune fonction du
-    parser Comité ne le lisait avant ce correctif. Conséquence observée sur
-    le cycle du 03/08/2026 : les 3 setups publiés (dont l'unique ELIGIBLE,
-    GBP/AUD) sont plafonnés par le Desk et le Comité affiche pourtant un
-    facteur limitant vide ou "—" pour GBP/AUD, alors que la couche
-    technique a explicitement motivé un plafond.
+    """PATCH-CAPREASON (ICF v2, Proposition 1 — audit C-05). Le moteur Desk
+    rend `<div class="cap-note">{message}</div>` quand un plafond de conviction
+    est appliqué (ex: "Plafond conviction appliqué : risque macro NON ÉVALUÉ
+    (couverture calendaire insuffisante) — cap prudentiel") — mais aucune
+    fonction du parser Comité ne le lisait avant ce correctif, et jusqu'à ce
+    round `bluestar.models.DeskSetup` ne pouvait même pas l'accueillir.
 
-    Champ optionnel, même statut que `entry_type` (audit X-9) : il
-    n'alimente qu'un enrichissement du `limiting_factor`, jamais un état
-    (`DecisionState`). Absence de `.cap-note` = cycle sans plafond réel =
-    None, jamais une erreur -- un setup non plafonné n'a légitimement
-    aucune raison d'avoir cet élément dans le HTML."""
+    Conséquence observée : des setups explicitement plafonnés par la couche
+    technique s'affichaient au Comité avec un facteur limitant qui n'en disait
+    rien.
+
+    Champ optionnel, même statut que `entry_type` : il n'alimente qu'un
+    enrichissement du `limiting_factor`, jamais un état (`DecisionState`).
+    Absence de `.cap-note` = setup non plafonné = None, jamais une erreur."""
     cap_tag = block.find(class_="cap-note")
     return cap_tag.get_text(" ", strip=True) if cap_tag else None
 
 
-def _extract_factors(block: Tag) -> dict[str, float]:
+def _extract_factors(block: Tag) -> tuple[dict[str, float], frozenset[str]]:
     """Grille des facteurs (F1-F7, Q-rang). Optionnelle ; une valeur
     individuelle non numérique est ignorée silencieusement (comportement
-    préexistant, distinct du traitement des champs de prix — cf. les factors
-    ne bloquent jamais une décision à eux seuls, contrairement à R:R)."""
+    préexistant, distinct du traitement des champs de prix — les factors ne
+    bloquent jamais une décision à eux seuls, contrairement à R:R).
+
+    PATCH-FACTORSMISS (ICF v2, Proposition 7) : retourne EN PLUS l'ensemble
+    des clés dont le `.factor-val` porte la classe CSS `miss`, c.-à-d. les
+    facteurs NON MESURÉS par le Desk (et donc exclus de son `absolute_mean`).
+    Sans cette information, un F4=0.00 mesuré et un F4=0.00 non mesuré sont
+    strictement indiscernables côté Comité (audit C-6).
+
+    PLOMBERIE UNIQUEMENT : aucune règle de décision n'est ajoutée dans ce
+    patch, délibérément — sinon la Proposition changerait des états et
+    sortirait du contrat Zéro Régression."""
     factors: dict[str, float] = {}
+    missing: set[str] = set()
     factor_grid = block.find(class_="factor-grid")
     if not factor_grid:
-        return factors
+        return factors, frozenset()
     for f in factor_grid.find_all(class_="factor"):
         lbl = f.find(class_="factor-lbl")
         val = f.find(class_="factor-val")
@@ -293,24 +262,17 @@ def _extract_factors(block: Tag) -> dict[str, float]:
             try:
                 factors[key] = float(val.get_text(strip=True))
             except ValueError:
-                pass
-    return factors
+                continue
+            if "miss" in (val.get("class") or []):
+                missing.add(key)
+    return factors, frozenset(missing)
 
 
 def _extract_metrics(block: Tag) -> tuple[str | None, float | None, int | None]:
     """Grille des métriques (Quality, MTF %, Age). Optionnelle. Retourne
-    (quality, mtf_pct, age_days).
-
-    Garde ajoutée lors du round d'audit du 21/07/2026 (trouvé par un audit
-    docx, confirmé par exécution) : cette fonction était la seule des trois
-    boucles d'extraction de grille (factors, metrics, prices) à accéder
-    directement `.find(...).get_text()` sans vérifier la présence de
-    l'élément — `_extract_factors` et `_extract_prices` avaient déjà la
-    garde équivalente. Un bloc `.metric` structurellement incomplet (ex.
-    `.metric-lbl` sans `.metric-val` voisin) levait `AttributeError`,
-    rattrapée par le filet générique de cli.py et catégorisée en code 5
-    au lieu du code 2 catégorisé — même classe de défaut que le `.pair`
-    manquant (2.1.1) et les casts `float()` non protégés (2.1.3)."""
+    (quality, mtf_pct, age_days). Garde de présence sur chaque sous-élément
+    (round du 21/07/2026) : un bloc `.metric` structurellement incomplet
+    levait AttributeError, catégorisée en code 5 au lieu du code 2."""
     quality = mtf = age_days = None
     metrics_grid = block.find(class_="metrics-grid")
     if not metrics_grid:
@@ -335,9 +297,7 @@ def _extract_metrics(block: Tag) -> tuple[str | None, float | None, int | None]:
 
 def _extract_prices(block: Tag, pair: str) -> tuple[float | None, float | None, float | None]:
     """Grille des prix (entry, sl, rr). Optionnelle au niveau du bloc, mais
-    toute valeur présente doit être numérique (cf. _safe_float — round
-    d'audit du 20/07/2026, trouvé par l'audit Gemini Pro). Retourne
-    (entry, stop_loss, risk_reward)."""
+    toute valeur présente doit être numérique (cf. _safe_float)."""
     entry = stop_loss = rr = None
     px_grid = block.find(class_="px-grid")
     if not px_grid:
@@ -358,21 +318,11 @@ def _extract_prices(block: Tag, pair: str) -> tuple[float | None, float | None, 
 
 
 def _extract_entry_type(block: Tag) -> str | None:
-    """X-9 FIX (round de validation zero-régression, 02/08/2026).
-
-    Le moteur Desk rend `<div class="px-card entry">...<div class="px-sub">
-    {{s.entry_type}}</div></div>` -- "Market" ou "Limit" -- mais aucune
-    fonction du parser Comité ne le lisait avant ce correctif. C'est
-    l'information nécessaire pour qualifier un ELIGIBLE dont l'entrée est
-    "Market" alors que le marché FX est fermé au moment de la génération
-    (cf. audit X-9 : "aucune notion d'ouverture de marché" ; le Comité a
-    désormais la donnée pour construire l'advisory correspondante dans
-    `bluestar.decide.selection_grid`).
-
-    Champ optionnel : retourne None si la structure est absente (ancien
-    document, ou actif sans bloc .entry), jamais une erreur -- ce champ ne
-    conditionne aucune décision par lui-même, il n'alimente qu'une advisory
-    non bloquante."""
+    """X-9 FIX (02/08/2026). Le moteur Desk rend
+    `<div class="px-card entry">...<div class="px-sub">{entry_type}</div></div>`
+    — "Market" ou "Limit". C'est l'information nécessaire pour qualifier un
+    ELIGIBLE dont l'entrée est "Market" alors que le marché FX est fermé au
+    moment de la génération. Champ optionnel : None si absent."""
     px_grid = block.find(class_="px-grid")
     if not px_grid:
         return None
@@ -385,16 +335,10 @@ def _extract_entry_type(block: Tag) -> str | None:
 
 def _extract_flags(block: Tag) -> tuple[dict, ...]:
     """Flags de contradiction (C1-C10) affichés sous un setup validé.
-
-    PATCH-DESKPARSE-F6 (round de validation zero-régression, 31/07/2026) --
-    voir audit F6 : "Les avertissements majeurs émis par la couche technique
-    ne sont pas extractibles par la couche de décision : le Comité ne peut
-    pas les prendre en compte, même s'il le voulait." Le moteur Desk
-    (SECTION 10 CONTRADICTIONS C1..C5, `apply_caps`) produit et rend déjà
-    ces flags dans le HTML (`s.flags`, un `<span class="flag {severity}">
-    {code} · {detail}</span>` par flag dans un conteneur `.flags-row`) --
-    mais aucune fonction du parser Comité ne les lisait. Champ optionnel :
-    un setup sans contradiction n'a légitimement pas de `.flags-row`."""
+    PATCH-DESKPARSE-F6 (31/07/2026) : le moteur Desk produit et rend ces flags
+    dans le HTML (`<span class="flag {severity}">{code} · {detail}</span>`)
+    mais aucune fonction du parser Comité ne les lisait. Champ optionnel : un
+    setup sans contradiction n'a légitimement pas de `.flags-row`."""
     flags_row = block.find(class_="flags-row")
     if flags_row is None:
         return ()
@@ -411,12 +355,11 @@ def _extract_flags(block: Tag) -> tuple[dict, ...]:
 
 
 def _extract_cal_status(block: Tag) -> tuple[str | None, str]:
-    """Statut calendaire par setup (PATCH-CALSTATUS, round du 31/07/2026,
-    audit F-05/C-04). Le Desk rend `<div class="cal-row"><span
-    class="cal-{status}">{STATUS}</span><span>{note}</span></div>` ; la ligne
-    « Horizon cible ≈ … » partage la classe conteneur `.cal-row` mais son
-    span n'a pas de classe cal-*, elle est donc ignorée sans ambiguïté.
-    Champ optionnel : un document ancien peut ne pas le porter."""
+    """Statut calendaire par setup (PATCH-CALSTATUS, audit F-05/C-04). Le Desk
+    rend `<div class="cal-row"><span class="cal-{status}">{STATUS}</span>
+    <span>{note}</span></div>` ; la ligne « Horizon cible ≈ … » partage la
+    classe conteneur `.cal-row` mais son span n'a pas de classe cal-*, elle est
+    donc ignorée sans ambiguïté."""
     for row in block.find_all(class_="cal-row"):
         span = row.find(class_=re.compile(r"^cal-"))
         if span is None:
@@ -432,22 +375,49 @@ def _extract_cal_status(block: Tag) -> tuple[str | None, str]:
     return None, ""
 
 
+# ---------------------------------------------------------------------------
+# Cascade de construction défensive (généralisation ICF v2)
+#
+# Historique : chaque nouveau champ optionnel (flags/cal_status B-1, entry_type
+# X-9, cap_reason/factors_missing ICF v2) ajoutait un `try/except TypeError`
+# imbriqué supplémentaire, jusqu'à rendre `_parse_setup` illisible et rendre
+# probable l'oubli d'un log de perte. Cette table remplace l'imbrication par
+# une boucle, à comportement STRICTEMENT identique :
+#   - on tente le schéma le plus complet d'abord ;
+#   - on retombe palier par palier si `bluestar.models.DeskSetup` ne connaît
+#     pas encore un champ ;
+#   - toute donnée réellement présente mais non transportable est journalisée ;
+#   - la perte de `flags` ou `cal_status` NON VIDES reste INTERDITE (raise),
+#     exactement comme avant (audit C-02 : la perte d'un avertissement majeur
+#     de la couche technique ne doit jamais être dégradée en warning de log).
+# ---------------------------------------------------------------------------
+_SETUP_OPTIONAL_TIERS: tuple[tuple[str, ...], ...] = (
+    ("flags", "cal_status", "cal_note", "entry_type", "cap_reason", "factors_missing"),
+    ("flags", "cal_status", "cal_note", "entry_type", "cap_reason"),
+    ("flags", "cal_status", "cal_note", "entry_type"),
+    ("flags", "cal_status", "cal_note"),
+    (),
+)
+
+_SETUP_FIELD_HINT = {
+    "flags": "champ `flags: tuple = ()` (patch B-1)",
+    "cal_status": "champ `cal_status: str | None = None` (patch B-1)",
+    "cal_note": "champ `cal_note: str = ''` (patch B-1)",
+    "entry_type": "champ `entry_type: str | None = None` (audit X-9)",
+    "cap_reason": "champ `cap_reason: str | None = None` (ICF v2, Proposition 1)",
+    "factors_missing": "champ `factors_missing: frozenset[str] = frozenset()` (ICF v2, Proposition 7)",
+}
+
+
 def _parse_setup(block: Tag) -> DeskSetup:
-    """
-    Orchestrateur pur : délègue chaque champ à une sous-fonction dédiée,
-    assemble le résultat. Décomposé lors du round d'audit du 20/07/2026
-    (complexité cyclomatique D/27 signalée par un outil d'analyse statique
-    déterministe — radon — confirmée par exécution, contrairement aux audits
-    LLM précédents qui n'avaient pas ce type de métrique). Comportement
-    strictement identique à l'ancienne version monolithique ; seule la
-    structure change. Chaque sous-fonction est individuellement plus simple
-    à lire, tester et modifier sans risquer de casser un champ voisin.
-    """
+    """Orchestrateur pur : délègue chaque champ à une sous-fonction dédiée,
+    assemble le résultat. Décomposé lors du round du 20/07/2026 (complexité
+    cyclomatique D/27 signalée par radon)."""
     pair = _extract_pair(block)
     direction = _extract_direction(block, pair)
     grade, value = _extract_conviction(block, pair)
     cluster = _extract_cluster(block)
-    factors = _extract_factors(block)
+    factors, factors_missing = _extract_factors(block)
     quality, mtf, age_days = _extract_metrics(block)
     entry, stop_loss, rr = _extract_prices(block, pair)
     entry_type = _extract_entry_type(block)
@@ -455,15 +425,6 @@ def _parse_setup(block: Tag) -> DeskSetup:
     cal_status, cal_note = _extract_cal_status(block)
     cap_reason = _extract_cap_reason(block)
 
-    # PATCH-DESKPARSE-B1 (round du 31/07/2026, audit B-1/C-02) : fin de la
-    # perte silencieuse. Si DeskSetup accepte les champs (modèle patché) :
-    # construction nominale, identique à l'intention du patch F6. Si le
-    # modèle les refuse ALORS QU'il y a des données à perdre (flags non
-    # vides ou cal_status présent) : DeskDocumentError — la perte d'un
-    # avertissement majeur de la couche technique ne doit JAMAIS être
-    # dégradée en warning de log (c'est exactement ce qui s'est produit,
-    # ou aurait pu se produire, sur EUR/CAD ce cycle). Si le modèle les
-    # refuse et qu'il n'y a RIEN à perdre : repli historique inchangé.
     base_kwargs = dict(
         pair=pair,
         direction=direction,
@@ -478,68 +439,48 @@ def _parse_setup(block: Tag) -> DeskSetup:
         entry=entry,
         stop_loss=stop_loss,
     )
-    # X-9 FIX (round de validation zero-régression, 02/08/2026), étendu par
-    # PATCH-CAPREASON (Proposition 1, ICF v2, 03/08/2026) : tentative en 4
-    # paliers désormais. Palier 0 (schéma complet, cap_reason inclus) ;
-    # si bluestar.models.DeskSetup n'a pas encore ce champ, palier 1
-    # (schéma X-9, entry_type inclus mais sans cap_reason — dégradation
-    # TOLÉRÉE et journalisée, cap_reason a le même statut non-critique
-    # qu'entry_type : il n'alimente qu'un enrichissement du
-    # limiting_factor, jamais un état) ; palier 2 (schéma B-1 historique,
-    # sans cap_reason ni entry_type) ; palier 3 (repli B-1 historique)
-    # reprend EXACTEMENT la même règle stricte qu'avant ce correctif pour
-    # flags/cal_status — aucun changement de comportement sur ce point.
-    try:
-        return DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status,
-                         cal_note=cal_note, entry_type=entry_type, cap_reason=cap_reason)
-    except TypeError:
-        pass
-    try:
-        setup = DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status,
-                          cal_note=cal_note, entry_type=entry_type)
-        if cap_reason is not None:
-            logger.info(
-                "desk_cap_reason_extracted_but_unsupported pair=%s cap_reason=%r — "
-                "bluestar.models.DeskSetup n'a pas (encore) le champ `cap_reason` "
-                "(Proposition 1, ICF v2) ; le plafond de conviction motivé par le "
-                "Desk n'apparaîtra pas dans le facteur limitant affiché au Comité.",
-                pair, cap_reason,
-            )
-        return setup
-    except TypeError:
-        pass
-    try:
-        setup = DeskSetup(**base_kwargs, flags=flags, cal_status=cal_status, cal_note=cal_note)
-        if entry_type is not None:
-            logger.info(
-                "desk_entry_type_extracted_but_unsupported pair=%s entry_type=%r — "
-                "bluestar.models.DeskSetup n'a pas (encore) le champ `entry_type` "
-                "(audit X-9) ; advisory 'marché fermé' indisponible pour ce setup.",
-                pair, entry_type,
-            )
-        if cap_reason is not None:
-            logger.info(
-                "desk_cap_reason_extracted_but_unsupported pair=%s cap_reason=%r — "
-                "bluestar.models.DeskSetup n'a pas (encore) le champ `cap_reason` "
-                "(Proposition 1, ICF v2) ; le plafond de conviction motivé par le "
-                "Desk n'apparaîtra pas dans le facteur limitant affiché au Comité.",
-                pair, cap_reason,
-            )
-        return setup
-    except TypeError as exc:
-        if flags or cal_status:
+    optional = {
+        "flags": flags,
+        "cal_status": cal_status,
+        "cal_note": cal_note,
+        "entry_type": entry_type,
+        "cap_reason": cap_reason,
+        "factors_missing": factors_missing,
+    }
+
+    last_exc: TypeError | None = None
+    for tier in _SETUP_OPTIONAL_TIERS:
+        try:
+            setup = DeskSetup(**base_kwargs, **{k: optional[k] for k in tier})
+        except TypeError as exc:
+            last_exc = exc
+            continue
+
+        # Perte INTERDITE : flags majeurs / statut calendaire non vides.
+        if ("flags" not in tier and flags) or ("cal_status" not in tier and cal_status):
             raise DeskDocumentError(
                 f"Setup {pair!r} : {len(flags)} flag(s) et/ou cal_status={cal_status!r} "
                 f"extraits du document mais refusés par bluestar.models.DeskSetup "
-                f"({exc}) — appliquer le patch B-1 dans bluestar/models.py "
-                f"(champs `flags: tuple = ()`, `cal_status: str | None = None`, "
-                f"`cal_note: str = ''`) avant de relancer. Perte de données "
-                f"interdite (audit C-02)."
-            ) from exc
-        logger.info(
-            "desk_setup_old_schema — DeskSetup sans champs flags/cal_status ; "
-            "appliquer le patch B-1 dans bluestar/models.py pour les activer")
-        return DeskSetup(**base_kwargs)
+                f"({last_exc}) — appliquer le patch B-1 dans bluestar/models.py "
+                f"avant de relancer. Perte de données interdite (audit C-02)."
+            ) from last_exc
+
+        # Perte TOLÉRÉE mais journalisée : champs d'enrichissement/divulgation.
+        for key, val in optional.items():
+            if key in tier or not val:
+                continue
+            logger.info(
+                "desk_setup_field_unsupported pair=%s field=%s value=%r — "
+                "bluestar.models.DeskSetup n'a pas (encore) le %s ; l'information "
+                "extraite du document n'atteindra pas le rapport du Comité.",
+                pair, key, val, _SETUP_FIELD_HINT.get(key, f"champ `{key}`"),
+            )
+        return setup
+
+    raise DeskDocumentError(
+        f"Setup {pair!r} : bluestar.models.DeskSetup n'accepte même pas le schéma "
+        f"minimal attendu ({last_exc}) — modèle et parser désynchronisés."
+    )
 
 
 _JSON_DIRECTION_MAP = {"Bullish": Direction.LONG, "Bearish": Direction.SHORT}
@@ -549,10 +490,9 @@ _JSON_DIRECTION_MAP = {"Bullish": Direction.LONG, "Bearish": Direction.SHORT}
 
 def _parse_correlation_groups(soup: BeautifulSoup) -> dict[str, tuple[CorrelationSignal, ...]]:
     """Lit le bloc `<script id="correlation-groups">` embarqué par le moteur
-    depuis le correctif du 27/07/2026. Absent (document produit par un moteur
-    plus ancien) ou malformé -> dict vide, jamais une erreur : c'est une
-    donnée d'appoint pour les advisories, elle ne conditionne aucune décision
-    et son absence ne rend pas le document desk invalide."""
+    depuis le correctif du 27/07/2026. Absent ou malformé -> dict vide, jamais
+    une erreur : c'est une donnée d'appoint pour les advisories, elle ne
+    conditionne aucune décision."""
     tag = soup.find("script", id="correlation-groups")
     if tag is None or not tag.string:
         return {}
@@ -587,20 +527,11 @@ def _parse_correlation_groups(soup: BeautifulSoup) -> dict[str, tuple[Correlatio
 
 
 def _extract_reject_direction(container: Tag, pair: str) -> Direction | None:
-    """Direction d'un actif rejeté/suspendu, lue depuis la classe CSS `.dir`
-    -- MÊME CONTRAT que `_extract_direction()` (setups validés) : exactement
-    'long' ou 'short' sur l'élément `.dir`, jamais une recherche de
-    sous-chaîne dans du texte libre.
-
-    PATCH-DESKPARSE-C03 (round de validation zero-régression, 31/07/2026) :
-    remplace l'ancienne recherche de "Bullish"/"Bearish" dans le texte
-    aplati de toute la ligne (`row_text`), qui incluait `reject_detail`. Un
-    détail de rejet contenant accidentellement le mot "Bullish" (ex. un futur
-    message "CHoCH Bullish invalidé") inversait silencieusement la direction
-    affichée au comité -- confirmé exploitable par l'audit (C-03). La classe
-    `.dir` est un champ structurel dédié, jamais du texte de commentaire :
-    même garantie que pour les setups validés, où ce risque n'existe pas.
-    """
+    """Direction d'un actif rejeté/suspendu, lue depuis la classe CSS `.dir` —
+    MÊME CONTRAT que `_extract_direction()` : exactement 'long' ou 'short',
+    jamais une recherche de sous-chaîne dans du texte libre (audit C-03 : un
+    détail de rejet contenant "Bullish" inversait silencieusement la direction
+    affichée au comité)."""
     dir_tag = container.find(class_="dir")
     if dir_tag is None:
         return None
@@ -612,15 +543,9 @@ def _extract_reject_direction(container: Tag, pair: str) -> Direction | None:
     if is_short and not is_long:
         return Direction.SHORT
     if classes:
-        # R-19 FIX (round de validation zero-régression, 02/08/2026, MINEUR) :
-        # "neutral" est une classe légitime et documentée du template Desk
-        # (`<span class="dir neutral">Neutral</span>`, ex. DE30/EUR), pas une
-        # anomalie -- elle se répétait pourtant à chaque cycle au même niveau
-        # de sévérité qu'une classe réellement inattendue, noyant les vrais
-        # avertissements (audit indépendant, rapport RUN-4, R-19). Seule une
-        # classe hors de {"long", "short", "neutral"} reste un warning ; le
-        # cas "neutral" légitime passe en debug (toujours traçable, jamais
-        # bruyant par défaut). Retour inchangé (`None`) dans les deux cas.
+        # R-19 : "neutral" est une classe légitime du template Desk (ex.
+        # DE30/EUR), pas une anomalie — debug plutôt que warning, pour ne pas
+        # noyer les vrais avertissements. Retour inchangé (None).
         if "neutral" in classes:
             logger.debug("desk_reject_direction_neutral pair=%s (classe légitime)", pair)
         else:
@@ -631,9 +556,8 @@ def _extract_reject_direction(container: Tag, pair: str) -> Direction | None:
 
 
 def _parse_rejected_suspended(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
-    """Actifs suspendus (ex: CAL_BLACKOUT) -- structure `.sus-item` (div),
-    jamais une ligne de table. Sélecteurs dédiés à cette structure : pas de
-    devinette de parent. (PATCH-DESKPARSE-C01/C02, 31/07/2026)"""
+    """Actifs suspendus (ex: CAL_BLACKOUT) — structure `.sus-item` (div),
+    jamais une ligne de table."""
     out: list[DeskRejectedSetup] = []
     for item in soup.find_all(class_="sus-item"):
         pair_tag = item.find(class_="sus-item-pair")
@@ -652,10 +576,8 @@ def _parse_rejected_suspended(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
 
 
 def _parse_rejected_table(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
-    """Rejets définitifs (ex: LOW_QUALITY, PRICE_PAST_TP, CLUSTER_DUP) --
-    structure `<tr>` (table), jamais un `.sus-item`. Sélecteurs dédiés à
-    cette structure : pas de devinette de parent.
-    (PATCH-DESKPARSE-C01/C02, 31/07/2026)"""
+    """Rejets définitifs (ex: LOW_QUALITY, PRICE_PAST_TP, CLUSTER_DUP) —
+    structure `<tr>` (table), jamais un `.sus-item`."""
     out: list[DeskRejectedSetup] = []
     for code_tag in soup.find_all("td", class_="reject-code"):
         row = code_tag.find_parent("tr")
@@ -673,59 +595,30 @@ def _parse_rejected_table(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
 
 
 def _parse_rejected(soup: BeautifulSoup) -> tuple[DeskRejectedSetup, ...]:
-    """RÉÉCRITURE (PATCH-DESKPARSE, round de validation zero-régression,
-    31/07/2026) -- voir audit C-01/C-02/C-03.
-
-    Cause racine de l'ancienne version : elle itérait sur TOUS les éléments
-    `class_="reject-code"` (span dans `.sus-item` OU `<td>` dans une table)
-    et devinait leur parent via `find_parent(class_="cal-row")` -- une
-    classe absente des deux templates réels (0 occurrence vérifiée dans le
-    HTML de production) -- avec repli sur `.parent`. Le compte total (31)
-    tombait juste par coïncidence numérique ; la paire (split sur "|") et la
-    direction (sous-chaîne dans tout le texte de la ligne) n'avaient aucun
-    contrat structurel et cassaient silencieusement sur toute variation de
-    template (ordre des colonnes, badge additionnel, mot "Bullish" dans un
-    détail).
-
-    Nouvelle version : deux extracteurs dédiés, un par structure HTML réelle
-    (`.sus-item` / `<tr>`), chacun avec un sélecteur explicite pour la paire
-    et une lecture de `.dir` pour la direction -- même contrat que
-    `_extract_direction()`. Une structure future qui ne correspond à AUCUN
-    des deux formats sera absente du résultat (pas de paire/direction
-    fausse) ; l'invariant `setups + rejected == universe_total`, déjà
-    vérifié dans `parse_desk`, le détectera.
-
-    Zero-régression vérifiée par rejeu sur le HTML du 31/07/2026 : les 31
-    paires, directions et reject_code produits sont identiques,
-    caractère pour caractère, à ceux de l'ancienne implémentation."""
+    """RÉÉCRITURE (PATCH-DESKPARSE, 31/07/2026 — audit C-01/C-02/C-03).
+    Deux extracteurs dédiés, un par structure HTML réelle (`.sus-item` / `<tr>`),
+    chacun avec un sélecteur explicite pour la paire et une lecture de `.dir`
+    pour la direction. Une structure future qui ne correspond à AUCUN des deux
+    formats sera absente du résultat (pas de paire/direction fausse) ;
+    l'invariant `setups + rejected == universe_total` le détectera."""
     return tuple(_parse_rejected_suspended(soup) + _parse_rejected_table(soup))
 
 
 def _parse_calendar_coverage(soup: BeautifulSoup) -> dict[str, frozenset[str]]:
-    """PATCH-CALCOVERAGE (Proposition 2, ICF v2 — rapport de synergie du
-    03/08/2026, C-3). Lit un éventuel bloc `<script type="application/json"
-    id="calendar-coverage">{"covered": [...], "uncovered": [...]}</script>`
-    émis par le moteur Desk, document-niveau (même patron que
-    `_parse_correlation_groups`).
+    """PATCH-CALCOVERAGE (ICF v2, Proposition 2 — audit C-3). Lit le bloc
+    `<script type="application/json" id="calendar-coverage">
+    {"covered": [...], "uncovered": [...]}</script>` émis par le moteur Desk,
+    document-niveau (même patron que `_parse_correlation_groups`).
 
-    Constat qui motive ce patch : la bannière du document dit déjà, en
-    prose française, qu'un statut `OK` sur une devise hors du filtre
-    producteur signifie "non mesuré", pas "dégagé" (ex: cycle du
-    03/08/2026, filtre producteur CAD/NZD/USD, devises AUD/CHF/EUR/GBP/JPY
-    hors couverture). Mais rien ne joint cette information à la ligne de
-    décision par actif : le lecteur voit `cal_status = OK` en vert pour
-    GBP/AUD sans savoir que les deux jambes sont hors couverture.
+    Constat qui motive ce patch : la bannière du document dit déjà, en prose
+    française, qu'un statut `OK` sur une devise hors du filtre producteur
+    signifie "non mesuré", pas "dégagé". Mais rien ne joignait cette
+    information à la ligne de décision par actif : le lecteur voyait
+    `cal_status = OK` en vert sans savoir que la jambe est hors couverture.
 
-    ⚠️ CE PARSER SUPPOSE UN CONTRAT D'ÉMISSION CÔTÉ DESK (ENGINE.V9.py)
-    QUI N'EST PAS CONFIRMÉ DANS LE CORPUS FOURNI À CE TOUR (UNKNOWN — le
-    fichier ENGINE.V9.py n'a pas été fourni). Tant que le moteur Desk
-    n'émet pas ce bloc, cette fonction retourne systématiquement le dict
-    vide ci-dessous et AUCUNE advisory de couverture n'est produite —
-    strictement inoffensif, jamais une erreur, jamais une décision.
-
-    Absent ou malformé -> covered=frozenset() et uncovered=frozenset() :
-    donnée d'appoint, ne conditionne aucune décision, son absence ne rend
-    pas le document desk invalide (même statut que correlation_groups)."""
+    Absent ou malformé -> covered/uncovered vides : donnée d'appoint, ne
+    conditionne aucune décision (elle ne produit qu'une advisory non
+    bloquante), son absence ne rend pas le document desk invalide."""
     empty = {"covered": frozenset(), "uncovered": frozenset()}
     tag = soup.find("script", id="calendar-coverage")
     if tag is None or not tag.string:
@@ -742,9 +635,23 @@ def _parse_calendar_coverage(soup: BeautifulSoup) -> dict[str, frozenset[str]]:
     if not isinstance(covered, list) or not isinstance(uncovered, list):
         return empty
     return {
-        "covered": frozenset(c for c in covered if isinstance(c, str)),
-        "uncovered": frozenset(c for c in uncovered if isinstance(c, str)),
+        "covered": frozenset(c.upper() for c in covered if isinstance(c, str)),
+        "uncovered": frozenset(c.upper() for c in uncovered if isinstance(c, str)),
     }
+
+
+_SNAPSHOT_OPTIONAL_TIERS: tuple[tuple[str, ...], ...] = (
+    ("banners", "calendar_coverage", "macro_regime_label"),
+    ("banners", "calendar_coverage"),
+    ("banners",),
+    (),
+)
+
+_SNAPSHOT_FIELD_HINT = {
+    "banners": "champ `banners: tuple[str, ...] = ()` (audit K-3/R-3/G4)",
+    "calendar_coverage": "champ `calendar_coverage: Mapping[str, frozenset[str]] = {}` (ICF v2, Proposition 2)",
+    "macro_regime_label": "champ `macro_regime_label: str | None = None` (ICF v2, Proposition 6)",
+}
 
 
 def parse_desk(html: str) -> DeskSnapshot:
@@ -780,87 +687,49 @@ def parse_desk(html: str) -> DeskSnapshot:
         rejected=rejected,
         correlation_groups=correlation_groups,
     )
-    # K-3/R-3/G4 FIX : même garantie anti-perte-silencieuse que le patch B-1
-    # (flags/cal_status sur DeskSetup, cf. _parse_setup ci-dessus). Si
-    # bluestar.models.DeskSnapshot ne porte pas encore `banners`, on retombe
-    # sur la construction historique plutôt que de lever une exception —
-    # mais on NE PERD PAS l'alerte en silence : elle est loguée en warning
-    # explicite pour que l'absence de couverture du modèle soit visible.
-    #
-    # PATCH-CALCOVERAGE (Proposition 2, ICF v2, 03/08/2026) étend la même
-    # cascade à `calendar_coverage`. Contrairement à `banners`, un dict de
-    # couverture VIDE (cas normal tant qu'ENGINE.V9.py n'émet pas le bloc
-    # JSON, cf. `_parse_calendar_coverage`) n'est PAS journalisé comme une
-    # perte -- il n'y a rien à perdre. Seul un dict non-vide qui ne pourrait
-    # pas être attaché au modèle serait une perte réelle, journalisée en
-    # warning au même titre que `banners`.
-    #
-    # PATCH-DUALREGIME (Proposition 6, ICF v2, 03/08/2026) ajoute un
-    # quatrième palier, le plus externe (le plus complet), pour
-    # `macro_regime_label` -- même statut non-critique que les précédents :
-    # divulgation pure, jamais consommée par `decide_all`/`decide_setup`.
-    try:
-        result = DeskSnapshot(**base_kwargs, banners=banners, calendar_coverage=calendar_coverage,
-                              macro_regime_label=macro_regime_label)
-    except TypeError:
-        pass
-    else:
-        logger.info(
-            "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
-            result.report_datetime, result.universe_evaluated, result.universe_total,
-            len(result.setups), len(result.rejected),
-        )
-        return result
-    try:
-        result = DeskSnapshot(**base_kwargs, banners=banners, calendar_coverage=calendar_coverage)
-    except TypeError:
-        pass
-    else:
-        if macro_regime_label is not None:
-            logger.info(
-                "desk_macro_regime_label_extracted_but_unsupported pair=n/a value=%r — "
-                "appliquer le patch (champ `macro_regime_label: str | None = None`) dans "
-                "bluestar/models.py::DeskSnapshot pour afficher les deux régimes "
-                "(Macro et Desk) distinctement au Comité (Proposition 6, Règle Absolue 4)",
-                macro_regime_label,
+    optional = {
+        "banners": banners,
+        "calendar_coverage": calendar_coverage,
+        "macro_regime_label": macro_regime_label,
+    }
+
+    result: DeskSnapshot | None = None
+    last_exc: TypeError | None = None
+    for tier in _SNAPSHOT_OPTIONAL_TIERS:
+        try:
+            result = DeskSnapshot(**base_kwargs, **{k: optional[k] for k in tier})
+        except TypeError as exc:
+            last_exc = exc
+            continue
+        for key, val in optional.items():
+            if key in tier:
+                continue
+            has_data = bool(val) if key != "calendar_coverage" else bool(
+                val.get("covered") or val.get("uncovered")
             )
-        logger.info(
-            "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
-            result.report_datetime, result.universe_evaluated, result.universe_total,
-            len(result.setups), len(result.rejected),
-        )
-        return result
-    try:
-        result = DeskSnapshot(**base_kwargs, banners=banners)
-    except TypeError as exc:
-        if banners:
+            if not has_data:
+                continue
             logger.warning(
-                "desk_banners_extracted_but_unsupported count=%d bannieres=%r — "
-                "appliquer le patch (champ `banners: tuple[str, ...] = ()`) dans "
-                "bluestar/models.py::DeskSnapshot pour ne pas perdre ces alertes "
+                "desk_snapshot_field_unsupported field=%s — appliquer le %s dans "
+                "bluestar/models.py::DeskSnapshot pour ne pas perdre cette information "
                 "document-niveau (%s)",
-                len(banners), banners, exc,
+                key, _SNAPSHOT_FIELD_HINT.get(key, f"champ `{key}`"), last_exc,
             )
-        result = DeskSnapshot(**base_kwargs)
-    else:
-        if calendar_coverage["covered"] or calendar_coverage["uncovered"]:
-            logger.warning(
-                "desk_calendar_coverage_extracted_but_unsupported covered=%d uncovered=%d — "
-                "appliquer le patch (champ `calendar_coverage: dict = {}`) dans "
-                "bluestar/models.py::DeskSnapshot pour ne pas perdre cette donnée "
-                "de couverture calendaire",
-                len(calendar_coverage["covered"]), len(calendar_coverage["uncovered"]),
-            )
-        if macro_regime_label is not None:
-            logger.info(
-                "desk_macro_regime_label_extracted_but_unsupported value=%r — "
-                "bluestar/models.py::DeskSnapshot n'a pas non plus `calendar_coverage`, "
-                "ce cycle dégrade au schéma banners-only (Proposition 6 indisponible)",
-                macro_regime_label,
-            )
+        break
+
+    if result is None:
+        raise DeskDocumentError(
+            f"bluestar.models.DeskSnapshot n'accepte même pas le schéma minimal "
+            f"attendu ({last_exc}) — modèle et parser désynchronisés."
+        )
+
     logger.info(
-        "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d",
+        "desk_parsed datetime=%s universe=%d/%d validated=%d rejected=%d "
+        "themes=%d uncovered=%d desk_regime=%r",
         result.report_datetime, result.universe_evaluated, result.universe_total,
-        len(result.setups), len(result.rejected),
+        len(result.setups), len(result.rejected), len(themes),
+        len(calendar_coverage.get("uncovered", ())), macro_regime_label,
     )
     return result
+
+  
