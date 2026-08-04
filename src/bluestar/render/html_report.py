@@ -67,6 +67,18 @@ _ASSET_BADGE_LABEL = {
 }
 
 
+def _advisory_breakdown(ordered: tuple[Decision, ...]) -> tuple[int, int, int]:
+    """PATCH-ADVSPLIT (Proposition 5, ICF v2). Extrait en fonction pure
+    pour être testable indépendamment du rendu HTML complet. Retourne
+    (total, actionnables [ELIGIBLE/WATCH], informatives [reste])."""
+    total = sum(len(d.advisories) for d in ordered)
+    actionable = sum(
+        len(d.advisories) for d in ordered
+        if d.state in (DecisionState.ELIGIBLE, DecisionState.WATCH)
+    )
+    return total, actionable, total - actionable
+
+
 def _render_row(d: Decision) -> str:
     badge_class = _STATE_BADGE_CLASS[d.state]
     legs_html = ""
@@ -260,7 +272,7 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
         d.pair for d in ordered if d.state in (DecisionState.BLOCKED_DATA, DecisionState.BLOCKED_RISK)
     ) or "aucun"
 
-    total_advisories = sum(len(d.advisories) for d in ordered)
+    total_advisories, actionable_advisories, informative_advisories = _advisory_breakdown(ordered)
 
     grid_version = ordered[0].grid_version
 
@@ -315,7 +327,7 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     <div class="kpi mid"><div class="lbl">WATCH</div><div class="val">{counts[DecisionState.WATCH]}</div><div class="hint">{_esc(watch_pairs)}</div></div>
     <div class="kpi low"><div class="lbl">BLOCKED</div><div class="val">{counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK]}</div><div class="hint">{_esc(blocked_pairs)}</div></div>
     <div class="kpi low"><div class="lbl">REJECT</div><div class="val">{counts[DecisionState.REJECT]}</div><div class="hint">rejets desk + jambe unique</div></div>
-    <div class="kpi royal"><div class="lbl">Advisories</div><div class="val">{total_advisories}</div><div class="hint">signaux non bloquants</div></div>
+    <div class="kpi royal"><div class="lbl">Advisories</div><div class="val">{total_advisories}</div><div class="hint">{actionable_advisories} actionnable(s) [ELIGIBLE/WATCH] · {informative_advisories} informative(s) [BLOCKED/REJECT]</div></div>
   </div>
 
   <!-- Intégrité des décisions — transmission des informations critiques -->
