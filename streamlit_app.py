@@ -23,7 +23,12 @@ from datetime import datetime, timezone
 import streamlit as st
 
 from bluestar import __version__
-from bluestar.decide.selection_grid import decide_all, GRID_VERSION
+from bluestar.decide.selection_grid import (
+    decide_all,
+    GRID_VERSION,
+    macro_priority_intersection_status,
+    strength_theme_divergences,
+)
 from bluestar.errors import DeskDocumentError, MacroDocumentError, RenderError
 from bluestar.extract.desk_parser import parse_desk, audit_document_freshness
 from bluestar.extract.macro_parser import parse_macro, audit_macro_document_freshness
@@ -143,12 +148,24 @@ if run_button:
 
     decisions = decide_all(desk, macro, now=now)
 
+    # ICF v2, Propositions 3 & 4 : diagnostics de synergie, purement
+    # documentaires. Calculés APRÈS decide_all et jamais réinjectés dans
+    # les décisions — ils ne peuvent modifier aucun état par construction.
+    divergences = strength_theme_divergences(desk, macro)
+    for _d in divergences:
+        st.warning(f"SYNERGIE FORCE↔THEME : {_d.detail}")
+    intersection_msg = macro_priority_intersection_status(desk, macro)
+    if intersection_msg:
+        st.warning(f"SYNERGIE INTERSECTION : {intersection_msg}")
+
     try:
         report_html = render_report(
             desk, macro, decisions, generated_at=now,
             macro_channel_status=macro_channel_status,
             macro_freshness_msg=macro_freshness_msg,
             desk_banners=desk_banners,
+            strength_theme_divergences=divergences,
+            macro_intersection_msg=intersection_msg,
         )
     except RenderError as exc:
         st.error(f"Échec de génération du rapport : {exc}")
