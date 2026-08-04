@@ -403,4 +403,43 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     {_desk_regime_html} ·
     {_coverage_html} ·
     Univers desk : <b>{desk.universe_total}</b> actifs · <b>{desk.universe_evaluated}</b> franchissent les gates · <b>{len(desk.setups)}</b> validés · <b>{len(desk.rejected)}</b> rejetés ·
-    Décisions comité : <b>{len(ordered)}/{desk.universe_total
+    Décisions comité : <b>{len(ordered)}/{desk.universe_total}</b> comité · <b>{actionable_advisories}</b> advisories actionnables · <b>{informative_advisories}</b> informatives
+  </div>
+
+  <div class="kpis">
+    <div class="kpi top"><div class="lbl">Éligibles</div><div class="val">{counts[DecisionState.ELIGIBLE]}</div><div class="hint">{eligible_pairs}</div></div>
+    <div class="kpi mid"><div class="lbl">Watch</div><div class="val">{counts[DecisionState.WATCH]}</div><div class="hint">{watch_pairs}</div></div>
+    <div class="kpi low"><div class="lbl">Bloqués</div><div class="val">{counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK]}</div><div class="hint">{blocked_pairs}</div></div>
+    <div class="kpi low"><div class="lbl">Rejetés</div><div class="val">{counts[DecisionState.REJECT]}</div><div class="hint">—</div></div>
+    <div class="kpi royal"><div class="lbl">Total advisories</div><div class="val">{total_advisories}</div><div class="hint">{actionable_advisories} actionnables · {informative_advisories} informatives</div></div>
+    <div class="kpi royal"><div class="lbl">Grid version</div><div class="val">{grid_version}</div><div class="hint">—</div></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Setup / Direction</th>
+        <th>Verdicts jambe</th>
+        <th>Advisory</th>
+        <th>État</th>
+        <th>Facteur limitant</th>
+        <th>Code source</th>
+      </tr>
+    </thead>
+    <tbody>
+{rows_html}
+    </tbody>
+  </table>
+
+{synergy_html}
+
+  <div class="footer-note">
+    Rapport généré par BLUESTAR v10.0 · Mode passif (aucune logique de décision dans ce module) ·
+    Données desk : {desk.report_datetime} {desk.report_timezone} ·
+    Données macro : {macro.report_datetime} {macro.report_timezone}
+  </div>
+</div>
+</body>
+</html>"""
+
+    return html_out
