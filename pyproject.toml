@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bluestar-committee"
-version = "3.0.4"
+version = "3.0.8"
 description = "Comité de sélection Bluestar — croisement macro x technique, zéro-bruit."
 readme = "README.md"
 requires-python = ">=3.10"
