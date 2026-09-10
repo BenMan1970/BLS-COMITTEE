@@ -395,6 +395,62 @@ def calendar_coverage_advisories(pair: str, uncovered_currencies: frozenset[str]
     return tuple(out)
 
 
+def calendar_silence_advisories(
+    pair: str,
+    covered_currencies: frozenset[str],
+    calendar_occurrences: Mapping[str, int] | None,
+    now: datetime | None = None,
+    feed_end_utc: datetime | None = None,
+    uncovered_currencies: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
+    """P3-4 (arbitrage écrit 11/09/2026, « on corrige P3 ») — advisory NON
+    bloquante par jambe : « devise déclarée couverte mais AUCUNE occurrence
+    observée — silence non vérifiable ».
+
+    Complément MIROIR de `calendar_coverage_advisories` (Proposition 2) :
+    celle-ci signalait la jambe HORS couverture (« OK = non mesuré ») ;
+    P3-4 signale la jambe que le Desk prétend couvrir alors que son propre
+    briefing calendaire n'en montre AUCUNE occurrence — un « OK » vert
+    reposant sur un flux muet pour cette devise n'est pas plus « dégagé ».
+
+    Conditions (toutes nécessaires) pour ne jamais conclure sur une
+    absence-d'information :
+      1. `covered_currencies` non vide — le Desk a déclaré sa couverture ;
+      2. `calendar_occurrences` non-None — un briefing calendaire est VISIBLE
+         (None = « rien à voir » ≠ « silence » ; doctrine Prop. 2) ;
+      3. jambe en couverture ET à 0 occurrence visible ;
+      4. GARDE DE FENÊTRE (spéc : « dont l'horizon déclaré couvre la fenêtre
+         du setup ») : si `feed_end_utc` est antérieure à `now`, le silence
+         s'explique par la TRONCATURE du flux (signalée ailleurs) — on se
+         tait. `now=None` (pureté des golden files, appelants sans horloge)
+         ⇒ garde inactive ;
+      5. ANTI-DOUBLON : si la même devise est aussi dans `uncovered_currencies`
+         (document incohérent), la Prop. 2 parle déjà — pas de superposition.
+    """
+    if calendar_occurrences is None or not covered_currencies or "/" not in pair:
+        return ()
+    if now is not None and feed_end_utc is not None and feed_end_utc < now:
+        return ()  # flux éteint avant l'horloge : silence = troncature constatée
+    out: list[str] = []
+    for token in pair.split("/"):
+        code = token.strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            continue
+        if code not in covered_currencies:
+            continue  # hors couverture : c'est la Prop. 2 qui le dit, pas ici
+        if code in uncovered_currencies:
+            continue  # document incohérent (couverte ET non couverte) : Prop. 2
+        if calendar_occurrences.get(code, 0) > 0:
+            continue  # occurrence visible : rien à signaler
+        out.append(
+            f"cohérence calendaire : devise {code} déclarée couverte par le Desk "
+            f"mais AUCUNE occurrence dans son briefing calendaire visible — un statut "
+            f"« OK » sur cette jambe repose sur un flux muet pour {code} ; "
+            f"non bloquant, à arbitrer avant toute action sur ce setup"
+        )
+    return tuple(out)
+
+
 def echo_leg(currency_code: str, is_long_leg: bool, macro: MacroSnapshot) -> LegEcho:
     """
     Prédicat gelé évaluant une seule jambe (une devise) d'un setup.
@@ -750,6 +806,9 @@ def decide_setup(
     correlation_groups: Mapping[str, tuple] = types.MappingProxyType({}),
     now: datetime | None = None,
     uncovered_currencies: frozenset[str] = frozenset(),
+    covered_currencies: frozenset[str] = frozenset(),
+    calendar_occurrences: Mapping[str, int] | None = None,
+    feed_end_utc: datetime | None = None,
 ) -> Decision:
     """Point d'entrée public. Signature élargie de deux paramètres OPTIONNELS
     (`now`, `uncovered_currencies`) : tout appelant existant obtient un
@@ -780,6 +839,16 @@ def decide_setup(
     cov = calendar_coverage_advisories(setup.pair, uncovered_currencies)
     if cov:
         decision = replace(decision, advisories=decision.advisories + cov)
+
+    # P3-4 (miroir de Prop. 2) : devise couverte sans occurrence visible —
+    # advisory NON bloquante, aucun état ne change (golden rejoué vérifié).
+    silence = calendar_silence_advisories(
+        setup.pair, covered_currencies, calendar_occurrences,
+        now=now, feed_end_utc=feed_end_utc,
+        uncovered_currencies=uncovered_currencies,
+    )
+    if silence:
+        decision = replace(decision, advisories=decision.advisories + silence)
 
     return decision
 
@@ -1066,8 +1135,31 @@ def decide_all(
             sorted(uncovered),
         )
 
+    # P3-4 : miroir de la Prop. 2 (couverture revendiquée sans occurrence
+    # visible). Tri-state respecté : occurrences=None (aucun briefing visible)
+    # => advisory structurellement muette, documents anciens inchangés.
+    covered = frozenset(getattr(desk, "covered_currencies", frozenset()))
+    occurrences = getattr(desk, "calendar_occurrences", None)
+    if covered and occurrences is not None and covered - set(occurrences):
+        logger.info(
+            "calendar_silence_p3_4 covered_without_occurrence=%s — advisory par jambe active",
+            sorted(covered - set(occurrences)),
+        )
+    _covmeta = getattr(desk, "calendar_coverage_meta", {}) or {}
+    _feed_end: datetime | None = None
+    try:
+        if _covmeta.get("feed_end_utc"):
+            _feed_end = datetime.fromisoformat(
+                str(_covmeta["feed_end_utc"]).replace("Z", "+00:00"))
+    except ValueError:
+        _feed_end = None  # date illisible : garde inactive, comportement d'avant
+
     decisions = [
-        decide_setup(s, macro, desk.correlation_groups, now=now, uncovered_currencies=uncovered)
+        decide_setup(s, macro, desk.correlation_groups, now=now,
+                     uncovered_currencies=uncovered,
+                     covered_currencies=covered,
+                     calendar_occurrences=occurrences,
+                     feed_end_utc=_feed_end)
         for s in desk.setups
     ]
 
