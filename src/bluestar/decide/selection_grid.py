@@ -91,7 +91,29 @@ MIN_RISK_REWARD = 1.5           # NON CALIBRÉ — valeur provisoire de l'auteur
                                 # doit re-vérifier les invariants de la couche précédente.
 MAX_IPS_AGE_DAYS_WARN = 5       # RÉSERVÉ, NON CÂBLÉ — déclaré mais aucun code ne le lit
 MAX_DESK_DOC_AGE_H = 3.0        # NON CALIBRÉ — garde de fraîcheur documentaire (audit B-2)
-GRID_VERSION = "bluestar-decide-v2.5"
+GRID_VERSION = "bluestar-decide-v2.6"
+# v2.6 (round correctif « mécanique » post-audit forensique du 09/09/2026) —
+# changements de COMPORTEMENT réels (états modifiables dans des cas que les
+# fixtures n'exerçaient pas), AUCUN seuil modifié, AUCUNE règle de gouvernance
+# ajoutée :
+#   (AC-01) fail-closed : age_days absent ou risk_reward absent -> BLOCKED_DATA
+#     « donnée requise absente » au lieu de sauter le gate (le neutral-par-
+#     défaut était un passeport, démontré par exécution sur le cycle réel) ;
+#   (AC-03) classification d'actif (classify_asset) prime la syntaxe de paire :
+#     métaux/indices à notation pairée (XAU/USD, DE30/EUR…) suivent enfin la
+#     branche « jambe unique + régime » documentée au lieu de traverser la
+#     grille FX deux jambes ;
+#   (AC-10) advisories IPS sur rejets réservées aux vraies paires FX (plus de
+#     prose « devise EUR jambe courte » sur un indice) et split gardé ;
+#   (AC-18) qualification G6 (entrée Market marché fermé) insensible à la casse ;
+#   (AC-10/C-05) placeholder « — » : les enrichissements flags/cap REMPLACENT
+#     le placeholder au lieu de le préfixer (contrat ICF v2 documenté par son
+#     propre test, jamais implémenté).
+# Les correctifs hors grille (parsing conviction AC-07, ips_date AC-13,
+# factors_missing AC-17, échappement KPI AC-16, garde de split AC-09, CI
+# AC-10) ne justifient pas un bump en eux-mêmes ; les cinq ci-dessus oui.
+# Voir test_grid_version_is_pinned, qui existe précisément pour forcer cette
+# revue à chaque changement.
 # v2.5 (04/08/2026, ICF v2 — audit de synergie inter-apps) : trois changements
 # de sortie réels, tous additifs et non bloquants —
 #   (P1) `cap_reason` du Desk injecté dans le `limiting_factor` ;
@@ -464,7 +486,12 @@ def _decide_setup_core(
     # X-9/G6 FIX : qualification explicite d'une entrée Market générée marché
     # fermé — advisory non bloquante, jamais un changement d'état.
     entry_type = getattr(setup, "entry_type", None)
-    if now is not None and entry_type == "Market" and _is_fx_market_closed(now):
+    # PATCH-P2-CASEGUARD (audit forensique 09/09, AC-18) : la comparaison
+    # exacte == "Market" désarmait silencieusement la qualification dès que le
+    # document écrivait "MARKET"/"market". Normalisation casse+espaces ; la
+    # condition reste advisory-only (jamais un changement d'état).
+    if (now is not None and (entry_type or "").strip().lower() == "market"
+            and _is_fx_market_closed(now)):
         advisories = advisories + (
             f"entrée Market générée marché FX déclaré fermé (week-end, {now:%Y-%m-%d %H:%M} UTC) "
             f"— le prix utilisé comme niveau d'entrée n'est pas un prix de marché actif ; "
@@ -472,7 +499,22 @@ def _decide_setup_core(
         )
 
     # --- Niveau 1 : intégrité / invalidation ---------------------------------
-    if setup.age_days is not None and setup.age_days > MAX_TECH_AGE_DAYS:
+    # PATCH-P2-FAILCLOSED (audit forensique 09/09, AC-01) : l'absence
+    # d'age_days court-circuitait ce gate — un document incomplet pouvait
+    # atteindre ELIGIBLE sans jamais passer le contrôle d'intégrité, alors
+    # que la même absence sur un champ de prix faisait crasher le cycle.
+    # Donnée requise absente = BLOCKED_DATA (« la vérification est
+    # impossible »), jamais une validation implicite. Aucun seuil modifié.
+    if setup.age_days is None:
+        return Decision(
+            pair=setup.pair, direction=setup.direction, state=DecisionState.BLOCKED_DATA,
+            legs=(), limiting_factor=(
+                f"âge du setup absent du document — gate d'intégrité "
+                f"(plafond {MAX_TECH_AGE_DAYS}j) non vérifiable, donnée requise absente"
+            ),
+            advisories=advisories,
+        )
+    if setup.age_days > MAX_TECH_AGE_DAYS:
         return Decision(
             pair=setup.pair, direction=setup.direction, state=DecisionState.BLOCKED_DATA,
             legs=(), limiting_factor=(
@@ -490,10 +532,20 @@ def _decide_setup_core(
         )
 
     # --- Niveau 2 : régime d'instrument (pairé vs jambe unique) -------------
+    # PATCH-P2-METALBRANCH (audit forensique 09/09, AC-03) : « XAU/USD » est
+    # syntaxalement une paire de deux codes alpha-3 — leg_currencies()
+    # renvoyait donc ses jambes et l'instrument court-circuitait la branche
+    # jambe-unique pour entrer dans la grille FX deux jambes, contredisant le
+    # contrat documenté (§3.6 : métaux/indices = jambe unique + biais de
+    # régime). La classification d'actif prime désormais la syntaxe de
+    # paire : tout instrument non-FX au sens de classify_asset() suit le mode
+    # jambe unique, QUELLE QUE SOIT sa notation. Aucun seuil, aucun état
+    # nouveau : la branche existante est simplement rendue atteignable.
     legs = setup.leg_currencies()
+    asset_class = classify_asset(setup.pair)
+    if legs is not None and asset_class is not AssetClass.FX_PAIR:
+        legs = None
     if legs is None:
-        asset_class = classify_asset(setup.pair)
-
         if asset_class in (AssetClass.EQUITY_INDEX, AssetClass.METAL):
             bias = regime_bias(asset_class, macro.regime, confidence=macro.regime_confidence_pct)
             if bias is None:
@@ -561,7 +613,20 @@ def _decide_setup_core(
         )
 
     # --- Niveau 4 : qualité technique minimale --------------------------------
-    if setup.risk_reward is not None and setup.risk_reward < MIN_RISK_REWARD:
+    # PATCH-P2-FAILCLOSED (audit forensique 09/09, AC-01) : même contrat que
+    # pour age_days — un R:R absent est une vérification IMPOSSIBLE, donc
+    # BLOCKED_DATA, pas un passage implicite du plancher. Le plancher
+    # MIN_RISK_REWARD lui-même est inchangé.
+    if setup.risk_reward is None:
+        return Decision(
+            pair=setup.pair, direction=setup.direction, state=DecisionState.BLOCKED_DATA,
+            legs=leg_echoes, limiting_factor=(
+                f"R:R absent du document — plancher technique "
+                f"({MIN_RISK_REWARD}) non vérifiable, donnée requise absente"
+            ),
+            advisories=advisories,
+        )
+    if setup.risk_reward < MIN_RISK_REWARD:
         return Decision(
             pair=setup.pair, direction=setup.direction, state=DecisionState.REJECT,
             legs=leg_echoes, limiting_factor=f"R:R {setup.risk_reward} sous le plancher {MIN_RISK_REWARD}",
@@ -632,7 +697,17 @@ def _augment_limiting_factor_with_flags(decision: Decision, setup: DeskSetup) ->
     elif "[flags desk" in clean_lf:
         clean_lf = re.sub(r"\[flags desk [^\]]+\]", "", clean_lf)
 
-    return replace(decision, limiting_factor=clean_lf + f" [flags desk : {flag_text}]")
+    # PATCH-P2-PLACEHOLDER (audit forensique 09/09, AC-10/AC-21 — contrat ICF v2
+    # C-05 déjà documenté et verrouillé par test, jamais implémenté) : quand le
+    # facteur limitant courant n'est que le placeholder « — » (ELIGIBLE sans
+    # autre cause), l'enrichissement doit le REMPLACER, non le concaténer —
+    # d'où l'ancienne cicatrice de rendu « — [flags desk : …] ». Aucun état
+    # touché : texte seulement ; les facteurs limitants réels restent prefixés.
+    clean_lf = "" if clean_lf.strip() in ("—", "-", "") else clean_lf.strip()
+    return replace(
+        decision,
+        limiting_factor=(f"{clean_lf} " if clean_lf else "") + f"[flags desk : {flag_text}]",
+    )
 
 
 def _augment_limiting_factor_with_cap_reason(decision: Decision, setup: DeskSetup) -> Decision:
@@ -657,9 +732,16 @@ def _augment_limiting_factor_with_cap_reason(decision: Decision, setup: DeskSetu
         return decision
     if cap_reason in decision.limiting_factor:
         return decision
+    # PATCH-P2-PLACEHOLDER (voir _augment_limiting_factor_with_flags) : le
+    # placeholder « — » est REMPLACÉ par le motif, pas préfixé — contrat ICF v2
+    # Proposition 1 (C-05) documenté par son propre test, jamais implémenté.
+    base = decision.limiting_factor.strip()
+    if base in ("—", "-", ""):
+        base = ""
+    addition = f"[cap desk : {cap_reason}]"
     return replace(
         decision,
-        limiting_factor=f"{decision.limiting_factor} [cap desk : {cap_reason}]",
+        limiting_factor=f"{base} {addition}".strip(),
     )
 
 
@@ -764,7 +846,19 @@ def _reject_currency_ips_advisories(
         return ()
     if "/" not in rejected.pair:
         return ()
-    base_ccy, quote_ccy = rejected.pair.split("/")
+    # PATCH-P2-INDEXLEG (audit forensique 09/09, AC-10) : l'advisory IPS
+    # appliquait la logique « jambe longue/courte » d'une paire FX à TOUT
+    # instrument contenant un « / » — « DE30/EUR » se voyait raconter une
+    # « positionnement devise EUR jambe courte » alors qu'un long DAX n'est
+    # pas un short EUR, et « XAU/USD » mélangeait métal et devise. Seules les
+    # vraies paires FX classifiées entrent ici. Le split est en plus gardé
+    # contre une paire à 2+ « / » (ValueError non rattrapé, cf. AC-09).
+    if classify_asset(rejected.pair) is not AssetClass.FX_PAIR:
+        return ()
+    parts = rejected.pair.split("/")
+    if len(parts) != 2:
+        return ()
+    base_ccy, quote_ccy = parts
     advisories: list[str] = []
     for currency, is_long_leg in (
         (base_ccy, rejected.direction == Direction.LONG),
