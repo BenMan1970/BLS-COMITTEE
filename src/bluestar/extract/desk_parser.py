@@ -202,10 +202,23 @@ def _extract_conviction(block: Tag, pair: str) -> tuple[str, float]:
         raise DeskDocumentError(
             f"Setup {pair!r} : élément .conv manquant — conviction non déterminable."
         )
-    conv_text = conv_tag.get_text(strip=True)  # ex: "BBB (0.77)"
-    conv_match = re.match(r"([A-Z+]+)\s*\(([\d.]+)\)", conv_text)
+    conv_text = conv_tag.get_text(strip=True)  # ex: "BBB (0.77)" / "AA (ajusté 0.77)"
+    # PATCH-P2-CONVICTION (audit forensique 09/09, AC-07) : le moteur Desk
+    # réel rend les grades ajustés « AA (ajusté 0.77) » — le patron strict
+    # `grade (nombre)` ne matchait jamais, et la valeur devenait NaN EN
+    # SILENCE sur la totalité des setups validés du document réel (les
+    # fixtures étaient un format plus ancien : suite verte hors-sol).
+    # Tout préfixe non numérique avant la valeur est désormais accepté ;
+    # un échec total reste NaN mais devient BRUYANT (warning journalisé).
+    conv_match = re.match(r"([A-Z+]+)\s*\((?:[^\d]*?)([\d.]+)\)", conv_text)
     grade = conv_match.group(1) if conv_match else conv_text
     value = float(conv_match.group(2)) if conv_match else float("nan")
+    if conv_match is None:
+        logger.warning(
+            "conviction_non_parsée pair=%s text=%r — conviction_value=NaN ; "
+            "le format du document ne correspond plus à « <grade> (<valeur>) »",
+            pair, conv_text,
+        )
     return grade, value
 
 
@@ -231,7 +244,13 @@ def _extract_cap_reason(block: Tag) -> str | None:
     enrichissement du `limiting_factor`, jamais un état (`DecisionState`).
     Absence de `.cap-note` = setup non plafonné = None, jamais une erreur."""
     cap_tag = block.find(class_="cap-note")
-    return cap_tag.get_text(" ", strip=True) if cap_tag else None
+    if cap_tag is None:
+        return None
+    # PATCH-P2-CAPWS (audit forensique 09/09, AC-10 — test verrou rouge) :
+    # le Desk rend la cap-note sur plusieurs lignes ; get_text(" ") laissait
+    # les sauts de ligne INTERNES du nœud dans la chaîne (double espace /
+    # newline). Champ d'affichage seulement : normalisation en espaces simples.
+    return " ".join(cap_tag.get_text(" ", strip=True).split())
 
 
 def _extract_factors(block: Tag) -> tuple[dict[str, float], frozenset[str]]:
@@ -259,11 +278,21 @@ def _extract_factors(block: Tag) -> tuple[dict[str, float], frozenset[str]]:
         val = f.find(class_="factor-val")
         if lbl and val:
             key = lbl.get_text(strip=True)
+            is_miss = "miss" in (val.get("class") or [])
             try:
                 factors[key] = float(val.get_text(strip=True))
             except ValueError:
+                # PATCH-P2-FACTORSMISS (audit forensique 09/09, AC-17) : une
+                # valeur « — » (non numérique) portant la classe `miss`
+                # sortait par `continue` du dict ET de factors_missing — la
+                # Proposition 7 était inopérante sur le format réel, où
+                # l'absence de mesure est justement rendue par « — » + miss.
+                # Un facteur non numérique marqué miss est un facteur NON
+                # MESURÉ : il entre dans factors_missing.
+                if is_miss:
+                    missing.add(key)
                 continue
-            if "miss" in (val.get("class") or []):
+            if is_miss:
                 missing.add(key)
     return factors, frozenset(missing)
 
@@ -640,8 +669,34 @@ def _parse_calendar_coverage(soup: BeautifulSoup) -> dict[str, frozenset[str]]:
     }
 
 
+def _parse_calendar_coverage_meta(soup: BeautifulSoup) -> dict[str, str]:
+    """HARNESS P3-2. Seconde lecture du bloc `calendar-coverage` : les signaux
+    d'intégrité du flux (truncated / feed_end_utc / horizon_h) que le moteur
+    Desk déclare à côté de covered/uncovered et que le consommateur jetait.
+    Valeurs normalisées en chaînes ("true"/"false") ; clés absentes omises ;
+    bloc absent ou malformé -> dict vide (zéro régression). Divulgation :
+    aucune règle ne consomme ce résultat."""
+    tag = soup.find("script", id="calendar-coverage")
+    if tag is None or not tag.string:
+        return {}
+    try:
+        raw = json.loads(tag.string)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    meta: dict[str, str] = {}
+    if isinstance(raw.get("truncated"), bool):
+        meta["truncated"] = "true" if raw["truncated"] else "false"
+    for key in ("feed_end_utc", "horizon_h", "horizon_hours"):
+        v = raw.get(key)
+        if v not in (None, ""):
+            meta[key] = str(v)
+    return meta
+
+
 _SNAPSHOT_OPTIONAL_TIERS: tuple[tuple[str, ...], ...] = (
-    ("banners", "calendar_coverage", "macro_regime_label"),
+    ("banners", "calendar_coverage", "calendar_coverage_meta", "macro_regime_label"),
     ("banners", "calendar_coverage"),
     ("banners",),
     (),
@@ -650,6 +705,7 @@ _SNAPSHOT_OPTIONAL_TIERS: tuple[tuple[str, ...], ...] = (
 _SNAPSHOT_FIELD_HINT = {
     "banners": "champ `banners: tuple[str, ...] = ()` (audit K-3/R-3/G4)",
     "calendar_coverage": "champ `calendar_coverage: Mapping[str, frozenset[str]] = {}` (ICF v2, Proposition 2)",
+    "calendar_coverage_meta": "champ `calendar_coverage_meta: Mapping[str, str] = {}` (HARNESS P3-2)",
     "macro_regime_label": "champ `macro_regime_label: str | None = None` (ICF v2, Proposition 6)",
 }
 
@@ -667,6 +723,7 @@ def parse_desk(html: str) -> DeskSnapshot:
     correlation_groups = _parse_correlation_groups(soup)
     banners = _parse_banners(soup)
     calendar_coverage = _parse_calendar_coverage(soup)
+    calendar_coverage_meta = _parse_calendar_coverage_meta(soup)
     macro_regime_label = _parse_macro_regime_label(soup)
 
     if len(setups) + len(rejected) != universe_total:
@@ -690,6 +747,7 @@ def parse_desk(html: str) -> DeskSnapshot:
     optional = {
         "banners": banners,
         "calendar_coverage": calendar_coverage,
+        "calendar_coverage_meta": calendar_coverage_meta,
         "macro_regime_label": macro_regime_label,
     }
 
