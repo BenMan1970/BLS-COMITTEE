@@ -147,7 +147,15 @@ class DeskSetup:
     def leg_currencies(self) -> tuple[str, str] | None:
         if "/" not in self.pair:
             return None
-        base, quote = self.pair.split("/")
+        # PATCH-P2-SPLITGUARD (audit forensique 09/09, AC-09) : une paire
+        # contenant 2+ « / » levait un ValueError non rattrapé (« too many
+        # values to unpack » → code CLI 5, chemin traceback). Une paire
+        # indéchiffrable n'est pas un crash : c'est un instrument sans
+        # jambes au sens de la grille, traité par la branche asset_class.
+        parts = self.pair.split("/")
+        if len(parts) != 2:
+            return None
+        base, quote = parts
         if not (len(base) == 3 and base.isalpha() and len(quote) == 3 and quote.isalpha()):
             return None
         if self.direction == Direction.LONG:
@@ -197,6 +205,15 @@ class DeskSnapshot:
     # seule forme joignable à une ligne de décision. Dict vide = information
     # absente du document (comportement strictement identique à avant).
     calendar_coverage: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    # HARNESS P3-2 (boucle de cohérence harnais -> comité) : le bloc
+    # `calendar-coverage` du producteur déclare aussi l'INTEGRITE du flux
+    # (`truncated`, `feed_end_utc`, `horizon_h`) — la bannière du document le
+    # dit en prose, mais le consommateur jetait le signal structuré : un
+    # horizon tronqué se lisait comme une couverture simplement « complète ».
+    # DIVULGATION PURE : aucune règle de décision ne consomme ce champ ; il
+    # n'enrichit que la ligne document-niveau de couverture. Document ancien
+    # ou bloc sans ces clés -> dict vide, rendu strictement identique à avant.
+    calendar_coverage_meta: Mapping[str, str] = field(default_factory=dict)
     # PATCH-DUALREGIME (ICF v2, Proposition 6, 04/08/2026) : "régime" propre au
     # Desk (état CALENDAIRE, ex. EVENT_DRIFT / POST_POLICY_REPRICING), distinct
     # du "régime" du Macro (état de MARCHÉ, ex. Mixed / Selective). Deux
