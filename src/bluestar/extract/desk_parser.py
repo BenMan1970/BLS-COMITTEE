@@ -324,26 +324,45 @@ def _extract_metrics(block: Tag) -> tuple[str | None, float | None, int | None]:
     return quality, mtf, age_days
 
 
-def _extract_prices(block: Tag, pair: str) -> tuple[float | None, float | None, float | None]:
-    """Grille des prix (entry, sl, rr). Optionnelle au niveau du bloc, mais
-    toute valeur présente doit être numérique (cf. _safe_float)."""
-    entry = stop_loss = rr = None
+def _extract_prices(block: Tag, pair: str) -> tuple[float | None, ...]:
+    """Grille des prix (entry, sl, tp1, tp2, rr) — les cinq `px-card` publiées
+    par le Desk. Optionnelle au niveau du bloc, mais toute valeur présente
+    doit être numérique (cf. _safe_float).
+    P3-3 : tp1/tp2 ajoutés (l'artefact 10/09 a confirmé la persistance de la
+    perte — le modèle ne les transportait pas, le rapport ne les affichait
+    pas)."""
+    entry = stop_loss = tp1 = tp2 = rr = None
     px_grid = block.find(class_="px-grid")
     if not px_grid:
-        return entry, stop_loss, rr
-    entry_card = px_grid.find(class_="entry")
-    if entry_card:
-        v = entry_card.find(class_="px-val")
-        entry = _safe_float(v.get_text(strip=True), field="entry", pair=pair) if v else None
-    sl_card = px_grid.find(class_="sl")
-    if sl_card:
-        v = sl_card.find(class_="px-val")
-        stop_loss = _safe_float(v.get_text(strip=True), field="stop_loss", pair=pair) if v else None
-    rr_card = px_grid.find(class_="rr")
-    if rr_card:
-        v = rr_card.find(class_="px-val")
-        rr = _safe_float(v.get_text(strip=True), field="risk_reward", pair=pair) if v else None
-    return entry, stop_loss, rr
+        return entry, stop_loss, tp1, tp2, rr
+
+    # Absence légitime DÉCLARÉE par le producteur, RESTREINTE AUX TP : le
+    # template du Desk rend `{{s.tp2 if s.tp2 else '—'}}` — pour tp1/tp2 un
+    # tiret graphique est une absence null, pas un document malformé (même
+    # doctrine que la normalisation « — » de l'âge, Phase 2).
+    # Pour entry/sl/rr, AUCUNE tolérance : le Desk ne publie jamais de tiret
+    # dans ces cartes, tout non-numérique reste DeskDocumentError (verrou du
+    # 20/07/2026 « non-numeric price field raises typed error », préservé).
+    dash_placeholder = {"", "-", "–", "—"}
+
+    def _card(cls: str, field: str, allow_dash: bool = False) -> float | None:
+        card = px_grid.find(class_=cls)
+        if not card:
+            return None
+        v = card.find(class_="px-val")
+        if v is None:
+            return None
+        txt = v.get_text(strip=True)
+        if allow_dash and txt in dash_placeholder:
+            return None
+        return _safe_float(txt, field=field, pair=pair)
+
+    entry = _card("entry", "entry")
+    stop_loss = _card("sl", "stop_loss")
+    tp1 = _card("tp1", "take_profit_1", allow_dash=True)
+    tp2 = _card("tp2", "take_profit_2", allow_dash=True)
+    rr = _card("rr", "risk_reward")
+    return entry, stop_loss, tp1, tp2, rr
 
 
 def _extract_entry_type(block: Tag) -> str | None:
@@ -421,6 +440,8 @@ def _extract_cal_status(block: Tag) -> tuple[str | None, str]:
 #     de la couche technique ne doit jamais être dégradée en warning de log).
 # ---------------------------------------------------------------------------
 _SETUP_OPTIONAL_TIERS: tuple[tuple[str, ...], ...] = (
+    ("flags", "cal_status", "cal_note", "entry_type", "cap_reason", "factors_missing",
+     "take_profit_1", "take_profit_2"),
     ("flags", "cal_status", "cal_note", "entry_type", "cap_reason", "factors_missing"),
     ("flags", "cal_status", "cal_note", "entry_type", "cap_reason"),
     ("flags", "cal_status", "cal_note", "entry_type"),
@@ -435,6 +456,8 @@ _SETUP_FIELD_HINT = {
     "entry_type": "champ `entry_type: str | None = None` (audit X-9)",
     "cap_reason": "champ `cap_reason: str | None = None` (ICF v2, Proposition 1)",
     "factors_missing": "champ `factors_missing: frozenset[str] = frozenset()` (ICF v2, Proposition 7)",
+    "take_profit_1": "champ `take_profit_1: float | None = None` (HARNESS P3-3)",
+    "take_profit_2": "champ `take_profit_2: float | None = None` (HARNESS P3-3)",
 }
 
 
@@ -448,7 +471,7 @@ def _parse_setup(block: Tag) -> DeskSetup:
     cluster = _extract_cluster(block)
     factors, factors_missing = _extract_factors(block)
     quality, mtf, age_days = _extract_metrics(block)
-    entry, stop_loss, rr = _extract_prices(block, pair)
+    entry, stop_loss, tp1, tp2, rr = _extract_prices(block, pair)
     entry_type = _extract_entry_type(block)
     flags = _extract_flags(block)
     cal_status, cal_note = _extract_cal_status(block)
@@ -475,6 +498,8 @@ def _parse_setup(block: Tag) -> DeskSetup:
         "entry_type": entry_type,
         "cap_reason": cap_reason,
         "factors_missing": factors_missing,
+        "take_profit_1": tp1,
+        "take_profit_2": tp2,
     }
 
     last_exc: TypeError | None = None
@@ -695,8 +720,53 @@ def _parse_calendar_coverage_meta(soup: BeautifulSoup) -> dict[str, str]:
     return meta
 
 
+# Ligne de tableau calendaire (`cal-ccy`) ou bande « Hors book » : première
+# majuscule de 3 lettres ASCII = code devise. Le « +N autre(s) » du Desk est
+# ignoré (non décomposable) — le comptage est donc un MINORANT honnête.
+_CCY_TOKEN_RE = re.compile(r"\b([A-Z]{3})\b")
+
+
+def _parse_calendar_occurrences(soup: BeautifulSoup) -> "dict[str, int] | None":
+    """P3-4 (arbitrage écrit 11/09/2026). Occurrences de devises VISIBLES dans
+    le briefing calendaire du Desk (`<div class="cal-brief">` : lignes
+    `td.cal-ccy` du tableau + bandeau `div.cal-ctx` « Hors book »).
+
+    Retourne :
+      None      -> aucun `cal-brief` dans le document. « Non visible » n'est
+                   JAMAIS « silence » : l'advisory P3-4 doit rester muette
+                   (couverture non déclarée = aucune conclusion possible,
+                   même doctrine que `calendar_coverage_advisories`).
+      {}        -> `cal-brief` présent mais AUCUNE occurrence décodable :
+                   c'est le vrai « silence affiché » que P3-4 doit signaler.
+      {ccy: n}  -> comptage par devise (1 ligne/tableau ou contexte = 1)."""
+    brief = soup.find("div", class_="cal-brief")
+    if brief is None:
+        return None
+    counts: dict[str, int] = {}
+    # 1) Tableau principal : première cellule « USD · S » -> token de tête.
+    for td in brief.find_all("td", class_="cal-ccy"):
+        head = (td.get_text(" ", strip=True).split("·")[0] or "").strip()
+        m = _CCY_TOKEN_RE.match(head)
+        if m:
+            counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    # 2) Bandeau « Hors book » : paires devise + libellé, ex.
+    #    « Hors book — USD Non-Farm (J+2, 190K) · CHF ... ». On compte chaque
+    #    occurrence d'un code isolé en tête de segment.
+    for ctx in brief.find_all("div", class_="cal-ctx"):
+        text = ctx.get_text(" ", strip=True)
+        if not text.startswith("Hors book"):
+            continue
+        for seg in text.split("·"):
+            m = _CCY_TOKEN_RE.search(seg)
+            if m:
+                ccy = m.group(1)
+                counts[ccy] = counts.get(ccy, 0) + 1
+    return counts
+
+
 _SNAPSHOT_OPTIONAL_TIERS: tuple[tuple[str, ...], ...] = (
-    ("banners", "calendar_coverage", "calendar_coverage_meta", "macro_regime_label"),
+    ("banners", "calendar_coverage", "calendar_coverage_meta",
+     "calendar_occurrences", "macro_regime_label"),
     ("banners", "calendar_coverage"),
     ("banners",),
     (),
@@ -706,6 +776,7 @@ _SNAPSHOT_FIELD_HINT = {
     "banners": "champ `banners: tuple[str, ...] = ()` (audit K-3/R-3/G4)",
     "calendar_coverage": "champ `calendar_coverage: Mapping[str, frozenset[str]] = {}` (ICF v2, Proposition 2)",
     "calendar_coverage_meta": "champ `calendar_coverage_meta: Mapping[str, str] = {}` (HARNESS P3-2)",
+    "calendar_occurrences": "champ `calendar_occurrences: Mapping[str, int] | None = None` (P3-4)",
     "macro_regime_label": "champ `macro_regime_label: str | None = None` (ICF v2, Proposition 6)",
 }
 
@@ -724,6 +795,7 @@ def parse_desk(html: str) -> DeskSnapshot:
     banners = _parse_banners(soup)
     calendar_coverage = _parse_calendar_coverage(soup)
     calendar_coverage_meta = _parse_calendar_coverage_meta(soup)
+    calendar_occurrences = _parse_calendar_occurrences(soup)
     macro_regime_label = _parse_macro_regime_label(soup)
 
     if len(setups) + len(rejected) != universe_total:
@@ -748,6 +820,7 @@ def parse_desk(html: str) -> DeskSnapshot:
         "banners": banners,
         "calendar_coverage": calendar_coverage,
         "calendar_coverage_meta": calendar_coverage_meta,
+        "calendar_occurrences": calendar_occurrences,
         "macro_regime_label": macro_regime_label,
     }
 
@@ -789,5 +862,7 @@ def parse_desk(html: str) -> DeskSnapshot:
         len(calendar_coverage.get("uncovered", ())), macro_regime_label,
     )
     return result
+
+  
 
   
