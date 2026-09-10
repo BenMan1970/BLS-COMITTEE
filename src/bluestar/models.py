@@ -139,6 +139,14 @@ class DeskSetup:
     # d'ELIGIBLE sans trigger mesuré" est une décision de gouvernance, à
     # traiter dans un patch séparé avec fixture dédiée).
     factors_missing: frozenset[str] = frozenset()
+    # HARNESS P3-3 (2026-09-11, redite relevée par le SET 10/09) : le Desk
+    # publie la grille complète Entry/SL/TP1/TP2/RR (cinq `px-card`) ; le
+    # Comité extrayait déjà entry/stop_loss/rr mais JETAIT TP1/TP2 (aucun
+    # champ) et ne rendait AUCUN niveau — une décision sans prix exécutable.
+    # Plomberie/transport pur : aucun gate ne consomme ces champs ; les états
+    # produits sont bit-à-bit indépendants (golden rejoué vérifié).
+    take_profit_1: float | None = None
+    take_profit_2: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "factors", types.MappingProxyType(dict(self.factors)))
@@ -214,6 +222,18 @@ class DeskSnapshot:
     # n'enrichit que la ligne document-niveau de couverture. Document ancien
     # ou bloc sans ces clés -> dict vide, rendu strictement identique à avant.
     calendar_coverage_meta: Mapping[str, str] = field(default_factory=dict)
+    # P3-4 (arbitrage écrit 11/09/2026, « on corrige P3 ») : occurrences de
+    # devises VISIBLES dans le briefing calendaire du Desk (`cal-brief` :
+    # lignes `cal-tbl` + bande « Hors book »). TRI-ÉTAT délibéré :
+    #   None  = document sans briefing calendaire visible — on NE PEUT RIEN
+    #           conclure : l'advisory P3-4 reste muette ;
+    #   {}    = briefing calendaire rendu mais AUCUNE occurrence — vrai
+    #           silence affiché, matière de l'advisory « silence non
+    #           vérifiable » ;
+    #   {...} = comptage par devise (une occurrence visible = 1).
+    # Plomberie et divulgation uniquement : AUCUNE règle d'état ne consomme
+    # ce champ ; il n'alimente que l'advisory NON bloquante P3-4.
+    calendar_occurrences: Mapping[str, int] | None = None
     # PATCH-DUALREGIME (ICF v2, Proposition 6, 04/08/2026) : "régime" propre au
     # Desk (état CALENDAIRE, ex. EVENT_DRIFT / POST_POLICY_REPRICING), distinct
     # du "régime" du Macro (état de MARCHÉ, ex. Mixed / Selective). Deux
