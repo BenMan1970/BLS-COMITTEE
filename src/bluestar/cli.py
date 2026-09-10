@@ -8,8 +8,9 @@ ou un ordonnanceur) :
   2 : erreur d'extraction du document desk (document structurellement
       malformé — l'extraction elle-même a échoué)
   3 : erreur de rendu du rapport
-  4 : erreur d'entrée/sortie (fichier introuvable, permissions, ou fichier
-      dépassant MAX_INPUT_FILE_SIZE_BYTES — cf. ce plafond ci-dessous)
+  4 : erreur d'entrée/sortie (fichier introuvable, permissions, fichier
+      dépassant MAX_INPUT_FILE_SIZE_BYTES — cf. ce plafond ci-dessous, ou
+      valeur --now non-ISO-8601)
   5 : erreur inattendue non catégorisée (à ne jamais voir en production stable)
   6 : au moins une décision porte une advisory non bloquante — comportement
       PAR DÉFAUT depuis la version 3.0.0 (voir note de rupture ci-dessous).
@@ -117,6 +118,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, type=Path, help="Chemin du rapport HTML de sortie.")
     parser.add_argument("--verbose", action="store_true", help="Logging niveau DEBUG.")
     parser.add_argument(
+        "--now", dest="now_iso", default=None,
+        help="Horloge décisionnelle ISO-8601 (ex. 2026-09-09T12:50:00Z ou "
+             "2026-09-09 12:50:00+00:00). Défaut : heure UTC courante. Sert à "
+             "rejouer un cycle à l'identique (déterminisme — audit forensique "
+             "09/09/2026, §20 du mandat ; R5 « non-reproductibilité »). Un "
+             "temps invalide est une erreur d'entrée (code 4), jamais un repli "
+             "silencieux sur l'horloge murale.",
+    )
+    parser.add_argument(
         "--allow-advisories", action="store_true",
         help="Retourne le code de sortie 0 même si au moins une décision porte "
              "une advisory non bloquante. Défaut (depuis v3.0.0) : les "
@@ -155,7 +165,29 @@ def main(argv: list[str] | None = None) -> int:
 
         # PATCH-B2/B4/F18 (audit 31/07/2026) : Activation des gardes-fous de 
         # transmission et de fraîcheur documentaire.
-        now = datetime.now(timezone.utc)
+        # ROUND HARNAIS (10/09/2026) : --now autorise le rejeu determine d'un
+        # cycle (chaque moteur est deja injectable : desk = meta.generated_at
+        # du merge, macro = now_utc du pipeline). Sans --now, comportement
+        # strictement identique a l'heure murale UTC.
+        if args.now_iso:
+            _now_txt = args.now_iso.strip().replace(" ", "T")
+            if _now_txt.endswith("Z"):
+                _now_txt = _now_txt[:-1] + "+00:00"
+            try:
+                now = datetime.fromisoformat(_now_txt)
+            except ValueError:
+                logger.error(
+                    "--now invalide : %r (attendu ISO-8601, ex. "
+                    "2026-09-09T12:50:00Z). Aucun repli sur l'horloge murale.",
+                    args.now_iso,
+                )
+                return 4
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            logger.info("Horloge decisionnelle figee (--now) : %s",
+                        now.astimezone(timezone.utc).isoformat())
+        else:
+            now = datetime.now(timezone.utc)
         
         # B-2 / F-04 : Audit de fraîcheur du document desk
         freshness_msg = audit_document_freshness(desk, now)
