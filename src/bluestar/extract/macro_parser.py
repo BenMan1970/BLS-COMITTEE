@@ -346,6 +346,3 @@ def parse_macro(html: str) -> MacroSnapshot:
     return result
 
     
-
-    
-
