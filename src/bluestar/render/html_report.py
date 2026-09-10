@@ -18,6 +18,7 @@ import html as html_lib
 import logging
 from datetime import datetime, timezone
 
+from bluestar import __version__ as _COMMITTEE_VERSION
 from bluestar.decide.selection_grid import (
     AssetClass,
     Decision,
@@ -328,11 +329,16 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
 
     rows_html = "\n".join(_render_row(d) for d in ordered)
 
-    eligible_pairs = ", ".join(d.pair for d in ordered if d.state == DecisionState.ELIGIBLE) or "aucun"
-    watch_pairs = ", ".join(d.pair for d in ordered if d.state == DecisionState.WATCH) or "aucun"
-    blocked_pairs = ", ".join(
+    # PATCH-P2-XSSESC (audit forensique 09/09, AC-16) : les paires viennent du
+    # document desk (input non fiable). Les cellules du tableau passaient par
+    # _esc ; les trois KPI de têtes construisaient leur hint en brut — un
+    # .pair « EUR/USD<img src=x onerror=…> » s'exécutait dans le rapport.
+    # Même échappement partout ; le rendu des paires légitimes est inchangé.
+    eligible_pairs = _esc(", ".join(d.pair for d in ordered if d.state == DecisionState.ELIGIBLE)) or "aucun"
+    watch_pairs = _esc(", ".join(d.pair for d in ordered if d.state == DecisionState.WATCH)) or "aucun"
+    blocked_pairs = _esc(", ".join(
         d.pair for d in ordered if d.state in (DecisionState.BLOCKED_DATA, DecisionState.BLOCKED_RISK)
-    ) or "aucun"
+    )) or "aucun"
 
     total_advisories, actionable_advisories, informative_advisories = _advisory_breakdown(ordered)
 
@@ -348,12 +354,65 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     )
 
     # ICF v2, Proposition 2 : rappel document-niveau de la couverture calendaire.
-    _uncovered = sorted(getattr(desk, "calendar_coverage", {}).get("uncovered", ()) or ())
-    _coverage_html = (
-        f'Couverture calendaire desk : <b>{len(_uncovered)}</b> devise(s) HORS couverture '
-        f'({_esc(", ".join(_uncovered))}) — « OK » y signifie « non mesuré »'
-        if _uncovered else
-        'Couverture calendaire desk : <span class="muted">non déclarée par le document</span>'
+    _cov = getattr(desk, "calendar_coverage", {})
+    _uncovered = sorted(_cov.get("uncovered", ()) or ())
+    _covered = sorted(_cov.get("covered", ()) or ())
+    # HARNESS P3-2 : le producteur déclare l'intégrité du flux calendaire
+    # (`truncated`, `feed_end_utc`, `horizon_h`) dans le même bloc JSON ;
+    # jusqu'ici seule la prose de la bannière le portait et le consommateur
+    # jetait le signal structuré — un horizon tronqué se rendait comme une
+    # couverture simplement « complète ». Divulgation pure, aucun état ne la
+    # consomme. Bloc ancien/sans flag -> suffixe vide, rendu identique à avant.
+    _covmeta = getattr(desk, "calendar_coverage_meta", {}) or {}
+    _trunc_note = ""
+    if str(_covmeta.get("truncated", "")).lower() == "true":
+        _hz = _covmeta.get("horizon_h") or _covmeta.get("horizon_hours")
+        try:
+            _hz_txt = f", horizon {int(float(_hz))} h" if _hz else ""
+        except (TypeError, ValueError):
+            _hz_txt = ""
+        _trunc_note = (
+            ' — <b>FLUX TRONQUÉ</b> (fin de couverture déclarée : '
+            f'{_esc(str(_covmeta.get("feed_end_utc", "?")))}{_hz_txt})'
+        )
+    # PATCH-P2-COVDISPLAY (audit forensique 09/09, AC-20) : « uncovered vide »
+    # se rendait comme « le document ne déclare rien » — une couverture
+    # déclarée COMPLÈTE (covered non vide, uncovered vide) était donc affichée
+    # « non déclarée ». Les deux cas sont désormais distincts.
+    if _uncovered:
+        _coverage_html = (
+            f'Couverture calendaire desk : <b>{len(_uncovered)}</b> devise(s) HORS couverture '
+            f'({_esc(", ".join(_uncovered))}) — « OK » y signifie « non mesuré »{_trunc_note}'
+        )
+    elif _covered:
+        _coverage_html = (
+            f'Couverture calendaire desk : <b>déclarée complète</b> '
+            f'({_esc(", ".join(_covered))}){_trunc_note}'
+        )
+    else:
+        _coverage_html = (
+            'Couverture calendaire desk : <span class="muted">non déclarée par le document</span>'
+            f'{_trunc_note}'
+        )
+
+    # PATCH-P2-NONECONF (audit forensique 09/09, AC-19) : le rendu affichait
+    # littéralement « confiance None% » quand le libellé du macro ne portait
+    # pas de confiance — un artefact de formatage lu comme une donnée.
+    _conf_txt = (
+        f'confiance {macro.regime_confidence_pct} %'
+        if macro.regime_confidence_pct is not None
+        else 'confiance non déclarée'
+    )
+
+    # PATCH-P2-IPSDATE-DISPLAY (audit forensique 09/09, AC-13) : le comité
+    # promeut sur des chiffres COT dont la date de relevé ne franchissait plus
+    # la frontière du parsing (voir macro_parser._parse_ips). Une fois extraite,
+    # elle EST divulguée ici — pur affichage, aucune logique dans ce module.
+    _ips_dates = {d.ips_date for d in macro.currencies.values() if d.ips_date}
+    _ips_prov = (
+        f'Provenance IPS (relevé) : <b>{_esc(" · ".join(sorted(_ips_dates)))}</b>'
+        if _ips_dates else
+        'Provenance IPS : <span class="muted">date de relevé non déclarée par le document</span>'
     )
 
     grid_version = ordered[0].grid_version
@@ -399,7 +458,8 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
   {freshness_html}
 
   <div class="meta-dates">
-    Régime macro (état de marché) : <b>{_esc(macro.regime)}</b> (confiance {_esc(macro.regime_confidence_pct)}%) ·
+    Régime macro (état de marché) : <b>{_esc(macro.regime)}</b> ({_conf_txt}) ·
+    {_ips_prov} ·
     {_desk_regime_html} ·
     {_coverage_html} ·
     Univers desk : <b>{desk.universe_total}</b> actifs · <b>{desk.universe_evaluated}</b> franchissent les gates · <b>{len(desk.setups)}</b> validés · <b>{len(desk.rejected)}</b> rejetés ·
@@ -434,7 +494,8 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
 {synergy_html}
 
   <div class="footer-note">
-    Rapport généré par BLUESTAR v10.0 · Mode passif (aucune logique de décision dans ce module) ·
+    Rapport généré par bluestar-committee v{_COMMITTEE_VERSION} · grille {_esc(grid_version)} · Mode passif (aucune logique de décision dans ce module) ·
+    <b>ELIGIBLE ≠ EXECUTER</b> — outil déterministe d'aide à la décision : aucune prédiction, aucune garantie ; toute action reste sous arbitrage humain. ·
     Données desk : {desk.report_datetime} {desk.report_timezone} ·
     Données macro : {macro.report_datetime} {macro.report_timezone}
   </div>
