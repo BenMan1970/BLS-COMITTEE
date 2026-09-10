@@ -132,17 +132,27 @@ def _parse_ips(soup: BeautifulSoup) -> dict[str, tuple[float | None, str]]:
     if container is None:
         raise MacroDocumentError("Conteneur IPS introuvable après l'ancre.")
 
-    # V4-22 FIX : chercher la date dans les spans frères (même pattern que
-    # _parse_themes dans desk_parser.py) plutôt que dans le texte brut du parent.
-    # Cela rend la capture robuste aux badges ajoutés entre l'ancre et la date.
+    # V4-22 FIX + PATCH-P2-IPSDATE (audit forensique 09/09, AC-13) : la date
+    # de source n'était cherchée que dans les spans ENFANTS DIRECTS du
+    # conteneur. Sur le document réel du 09/09/2026, la mention
+    # « [OBSERVÉ — CFTC Non-Commercials | Vendredi 4 septembre 2026] » est un
+    # span ENCHEÎTRÉ dans la div « Lecture : … » : la capture échouait sur CE
+    # document à chaque cycle — ips_date restait « non disponible » et le
+    # rapport promouvait des chiffres COT sans jamais divulguer leur date de
+    # relevé. Recherche désormais récursive dans les spans, avec repli sur le
+    # texte complet du conteneur.
+    date_re = re.compile(r"(Vendredi|Lundi|Mardi|Mercredi|Jeudi|Samedi|Dimanche)"
+                         r"\s+\d{1,2}\s+\w+\s+\d{4}")
     source_date = "non disponible dans les documents fournis"
-    for span in container.find_all("span", recursive=False):
-        span_text = span.get_text(" ", strip=True)
-        date_match = re.search(r"(Vendredi|Lundi|Mardi|Mercredi|Jeudi|Samedi|Dimanche)\s+\d{1,2}\s+\w+\s+\d{4}",
-                               span_text)
+    for span in container.find_all("span"):
+        date_match = date_re.search(span.get_text(" ", strip=True))
         if date_match:
             source_date = date_match.group(0)
             break
+    if source_date.startswith("non disponible"):
+        date_match = date_re.search(container.get_text(" ", strip=True))
+        if date_match:
+            source_date = date_match.group(0)
 
     result: dict[str, tuple[float | None, str]] = {}
     for row in container.find_all(class_="rank-row"):
@@ -213,12 +223,43 @@ def _parse_priority_setups(soup: BeautifulSoup) -> tuple[MacroPrioritySetup, ...
     return tuple(setups)
 
 
+# HARNESS FIX P3-1 (boucle de cohérence macro->comité) : le moteur macro émet
+# un vocabulaire FINI de 9 régimes (regime_engine) + 3 libellés legacy S1
+# (« MIXTE — biais sélectif », « RISK-ON/RISK-OFF — ... »). Deux noms —
+# Risk-On, Risk-Off — contiennent un trait d'union que les classes
+# [A-Za-z /] des regex coupaient silencieusement : « Risk-On » était rendu
+# "Risk" (corruption de libellé, pas une absence). Motifs élargis au trait
+# d'union ; la liste ci-dessous sert de tripwire : tout nom capturé HORS
+# vocabulaire déclaré est journalisé en WARNING (dérive de contrat producteur)
+# sans bloquer ni transformer la valeur. Divulgation pure : le régime
+# n'alimente AUCUNE grille de décision (états produits inchangés).
+MACRO_REGIME_VOCABULARY = frozenset({
+    "Risk-On", "Risk-Off", "Goldilocks", "Reflation", "Disinflation",
+    "Late Cycle", "Dollar Smile", "Policy Divergence", "Mixed / Selective",
+})
+_LEGACY_REGIME_PREFIXES = ("MIXTE", "RISK-ON", "RISK-OFF")
+
+
+def _regime_tripwire(regime: str) -> None:
+    if regime in MACRO_REGIME_VOCABULARY:
+        return
+    upper = regime.upper()
+    if any(upper.startswith(p) for p in _LEGACY_REGIME_PREFIXES):
+        return
+    logger.warning(
+        "macro regime %r hors du vocabulaire déclaré du moteur macro "
+        "(dérive de contrat producteur ?) - valeur conservée telle quelle",
+        regime,
+    )
+
+
 def _parse_regime(soup: BeautifulSoup) -> tuple[str, float | None]:
     text = soup.get_text(" ", strip=True)
     # Motif principal (inchangé) : "Régime « X »", fermé par un guillemet
     # français explicite — essayé en premier, comportement identique à avant
     # ce correctif pour tout document où il matche.
-    regime_match = re.search(r"Régime\s*[:\u00a0]?\s*«\s*([A-Za-z /]+?)\s*»", text)
+    # P3-1 : classe élargie [A-Za-z /-] pour capter « Risk-On » / « Risk-Off ».
+    regime_match = re.search(r"Régime\s*[:\u00a0]?\s*«\s*([A-Za-z][A-Za-z /-]*?)\s*»", text)
     if regime_match is None:
         # R-7 FIX (round de validation zero-régression, 02/08/2026) : l'audit
         # indépendant a re-dérivé que la regex d'origine n'atteignait QUE la
@@ -232,10 +273,15 @@ def _parse_regime(soup: BeautifulSoup) -> tuple[str, float | None]:
         # régime du rapport terminal (cf. audit R-7).
         # Repli additif : essayé UNIQUEMENT si le motif principal ne matche
         # pas, donc zéro changement pour le cas déjà correct.
+        # P3-1 : traits d'union autorisés dans chaque segment ("Risk-On",
+        # legacy "RISK-ON") ; le motif s'arrête sur l'EM-dash, non inclus.
         regime_match = re.search(
-            r"Régime\s+(?:du\s+jour|identifié)\s+([A-Za-z]+(?:\s*/\s*[A-Za-z]+)?)", text
+            r"Régime\s+(?:du\s+jour|identifié)\s+"
+            r"([A-Za-z][A-Za-z-]*(?:\s*/\s*[A-Za-z][A-Za-z-]*)?)", text
         )
     regime = regime_match.group(1).strip() if regime_match else "non disponible dans les documents fournis"
+    if regime_match is not None:
+        _regime_tripwire(regime)
     conf_match = re.search(r"[Cc]onfiance\D{0,10}(\d+)\s*%", text)
     confidence = float(conf_match.group(1)) if conf_match else None
     return regime, confidence
@@ -300,3 +346,4 @@ def parse_macro(html: str) -> MacroSnapshot:
     return result
 
     
+
