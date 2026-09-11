@@ -1,0 +1,577 @@
+"""
+Rendu HTML du rapport de comité Bluestar.
+
+Principe architectural : ce module est un CONSOMMATEUR PASSIF du schéma de
+décision. Il ne contient aucune logique de décision — il ne fait que mettre en
+forme des objets `Decision` déjà calculés par `bluestar.decide.selection_grid`.
+Aucune ligne de tableau n'est écrite à la main : tout est généré depuis les
+données réelles, setup par setup.
+
+Le design (header BLUESTAR, palette, disposition) reprend à l'identique celui
+validé manuellement dans les itérations précédentes : étoile bleu royal
+(#1B45B4) sur fond blanc — jamais l'inverse.
+"""
+
+from __future__ import annotations
+
+import html as html_lib
+import logging
+from datetime import datetime, timezone
+
+from bluestar import __version__ as _COMMITTEE_VERSION
+from bluestar.decide.selection_grid import (
+    AssetClass,
+    Decision,
+    DecisionState,
+    LegVerdict,
+    STRENGTH_STRONG_MIN,
+    STRENGTH_WEAK_MAX,
+    StrengthThemeDivergence,
+)
+from bluestar.errors import RenderError
+from bluestar.extract.desk_parser import audit_document_freshness
+from bluestar.models import DeskSnapshot, MacroSnapshot
+
+logger = logging.getLogger("bluestar.render")
+
+_STATE_BADGE_CLASS = {
+    DecisionState.ELIGIBLE: "b-eligible",
+    DecisionState.WATCH: "b-watch",
+    DecisionState.REJECT: "b-reject",
+    DecisionState.BLOCKED_DATA: "b-blocked",
+    DecisionState.BLOCKED_RISK: "b-blocked",
+}
+
+_VERDICT_CLASS = {
+    LegVerdict.CONFLUENCE: "v-confluence",
+    LegVerdict.CONFLIT: "v-conflit",
+    LegVerdict.NEUTRE: "v-neutre",
+    LegVerdict.INDETERMINE: "v-indetermine",
+}
+
+_VERDICT_LABEL = {
+    LegVerdict.CONFLUENCE: "Confluence",
+    LegVerdict.CONFLIT: "Conflit",
+    LegVerdict.NEUTRE: "Neutre",
+    LegVerdict.INDETERMINE: "Indéterminé",
+}
+
+_STATE_ORDER = {
+    DecisionState.ELIGIBLE: 0,
+    DecisionState.WATCH: 1,
+    DecisionState.BLOCKED_DATA: 2,
+    DecisionState.BLOCKED_RISK: 3,
+    DecisionState.REJECT: 4,
+}
+
+
+def _esc(text: str) -> str:
+    return html_lib.escape(str(text), quote=True)
+
+
+_ASSET_BADGE_LABEL = {
+    AssetClass.EQUITY_INDEX: "INDICE - JAMBE UNIQUE",
+    AssetClass.METAL: "METAL",
+    AssetClass.OTHER: "NON CLASSIFIE",
+}
+
+
+def _advisory_breakdown(ordered: tuple[Decision, ...]) -> tuple[int, int, int]:
+    """PATCH-ADVSPLIT (Proposition 5, ICF v2). Extrait en fonction pure pour
+    être testable indépendamment du rendu HTML complet. Retourne
+    (total, actionnables [ELIGIBLE/WATCH], informatives [reste]).
+
+    Motif : un compteur global sur-signale d'un ordre de grandeur quand la
+    grande majorité des advisories portent sur des lignes déjà bloquées ou
+    rejetées, donc non actionnables."""
+    total = sum(len(d.advisories) for d in ordered)
+    actionable = sum(
+        len(d.advisories) for d in ordered
+        if d.state in (DecisionState.ELIGIBLE, DecisionState.WATCH)
+    )
+    return total, actionable, total - actionable
+
+
+def _fmt_level(v: float | None) -> str:
+    """Format monospace compact des prix (0.80975 → « 0.80975 », 4350.0 →
+    « 4350 ») ; None → tiret graphiquement neutre, jamais « None »."""
+    return "—" if v is None else f"{v:g}"
+
+
+def _levels_html(setup) -> str:
+    """HARNESS P3-3 (2026-09-11) : les prix exécutables publiés par le Desk
+    (Entry/SL/TP1/TP2/RR) étaient extraits en partie et rendus nulle part —
+    une décision du comité sans niveaux est inopérante pour l'exécution.
+    Divulgation pure : aucune valeur de cette ligne ne provient d'une règle
+    du comité ; ce sont les nombres du document source, passés tels quels
+    (échappement compris). Setup absent (ligne rejetée, pas de carte) → rien.
+    """
+    if setup is None:
+        return ""
+    if all(getattr(setup, a, None) is None for a in
+           ("entry", "stop_loss", "take_profit_1", "take_profit_2", "risk_reward")):
+        return ""  # carte sans AUCUN niveau chiffré : pas de ligne vide
+    parts = []
+    entry = _fmt_level(getattr(setup, "entry", None))
+    etype = getattr(setup, "entry_type", None)
+    suffix = f' <span class="muted">({_esc(str(etype))})</span>' if etype else ""
+    parts.append(f"Entrée {entry}{suffix}")
+    for lbl, attr in (("SL", "stop_loss"), ("TP1", "take_profit_1"),
+                      ("TP2", "take_profit_2"), ("R:R", "risk_reward")):
+        parts.append(f"{lbl} {_fmt_level(getattr(setup, attr, None))}")
+    return '<div class="levels">' + " · ".join(parts) + "</div>"
+
+
+def _card_meta_html(setup) -> str:
+    """P3-5 (11/09/2026, arbitrage « applique ce que tu penses améliorer le
+    committee ») : le Desk publie sa propre évaluation de chaque setup validé —
+    note de conviction, Quality, MTF %, âge, cluster — et le comité ne
+    l'affichait nulle part. Même doctrine que P3-3 : DIVULGATION PURE, aucun
+    de ces nombres ne sort d'une règle du comité ; tous viennent du document
+    source et sont passés tels quels. Champ absent -> segment omis (jamais de
+    « None »). Setup absent (ligne rejet, pas de carte) -> rien."""
+    if setup is None:
+        return ""
+    parts = []
+    grade = getattr(setup, "conviction_grade", None)
+    value = getattr(setup, "conviction_value", None)
+    if grade:
+        txt = f"Conviction {_esc(str(grade))}"
+        if value is not None:
+            txt += f" ({value:.2f})"
+        parts.append(txt)
+    quality = getattr(setup, "quality", None)
+    if quality:
+        parts.append(f"Qualité {_esc(str(quality))}")
+    mtf = getattr(setup, "mtf_pct", None)
+    if mtf is not None:
+        parts.append(f"MTF {mtf:g} %")
+    age = getattr(setup, "age_days", None)
+    if age is not None:
+        parts.append(f"Âge {age} j")
+    cluster = getattr(setup, "cluster_tag", None)
+    if cluster:
+        parts.append(f"Cluster {_esc(str(cluster))}")
+    if not parts:
+        return ""
+    return '<div class="cardmeta">' + " · ".join(parts) + "</div>"
+
+
+def _render_row(d: Decision, setup=None) -> str:
+    badge_class = _STATE_BADGE_CLASS[d.state]
+    legs_html = ""
+    if d.legs:
+        for leg in d.legs:
+            vclass = _VERDICT_CLASS[leg.verdict]
+            vlabel = _VERDICT_LABEL[leg.verdict]
+            legs_html += (
+                f'<span class="verdict-line"><span class="{vclass}">{_esc(leg.currency)}</span> '
+                f'{vlabel} — {_esc(leg.detail)}</span>'
+            )
+    else:
+        legs_html = '<span class="verdict-line"><span class="v-neutre">—</span> Non applicable / non évalué</span>'
+
+    advisories_html = ""
+    if d.advisories:
+        items = "".join(f"<li>{_esc(a)}</li>" for a in d.advisories)
+        advisories_html = f'<ul class="advisory-list">{items}</ul>'
+
+    if d.direction is None:
+        dir_class, dir_arrow = "dir-neutral", "◆ N/A"
+    elif d.direction.value == "long":
+        dir_class, dir_arrow = "dir-long", "▲ LONG"
+    else:
+        dir_class, dir_arrow = "dir-short", "▼ SHORT"
+
+    asset_badge_html = ""
+    if d.asset_class != AssetClass.FX_PAIR:
+        label = _ASSET_BADGE_LABEL.get(d.asset_class, d.asset_class.value)
+        asset_badge_html = f'<br><span class="badge badge-asset">{_esc(label)}</span>'
+
+    source_code_html = _esc(d.source_reject_code) if d.source_reject_code else '<span class="muted">—</span>'
+
+    return f"""
+      <tr>
+        <td><span class="pair">{_esc(d.pair)}</span><br><span class="{dir_class}">{dir_arrow}</span>{asset_badge_html}{_levels_html(setup)}{_card_meta_html(setup)}</td>
+        <td>{legs_html}</td>
+        <td class="detail">{advisories_html if advisories_html else '<span class="muted">aucun</span>'}</td>
+        <td><span class="badge {badge_class}">{_esc(d.state.value)}</span></td>
+        <td class="factor">{_esc(d.limiting_factor)}</td>
+        <td class="detail">{source_code_html}</td>
+      </tr>"""
+
+
+def _render_synergy_section(
+    divergences: tuple[StrengthThemeDivergence, ...],
+    intersection_msg: str | None,
+) -> str:
+    """ICF v2, Propositions 3 & 4 — bloc DOCUMENTAIRE.
+
+    Contrat explicite : ce bloc n'affiche que des constats. Aucun élément
+    rendu ici ne correspond à un état, un score ou un gate — les deux
+    diagnostics sont produits par des fonctions pures qui ne retournent pas
+    de `Decision`."""
+    if not divergences:
+        div_html = (
+            '<div class="detail muted">aucune divergence franche détectée '
+            f'(seuils de lecture : force ≥ {STRENGTH_STRONG_MIN:.0f} = forte, '
+            f'≤ {STRENGTH_WEAK_MAX:.0f} = faible) — ou thèmes desk / scores de force '
+            'indisponibles dans les documents fournis.</div>'
+        )
+    else:
+        items = "".join(f"<li>{_esc(d.detail)}</li>" for d in divergences)
+        div_html = f'<ul class="advisory-list">{items}</ul>'
+
+    inter_html = (
+        f'<div class="detail">{_esc(intersection_msg)}</div>' if intersection_msg
+        else '<div class="detail muted">intersection non vide, ou canal macro vide '
+             '(cas déjà déclaré par le statut du canal macro ci-dessus) — le garde-fou '
+             'de conflit frontal a pu s\'exercer normalement.</div>'
+    )
+
+    return f"""
+  <div class="section synergy" style="font-size:11px;margin-top:20px;border-top:2px solid var(--royal-dark);padding-top:12px">
+    <div class="sec-hdr" style="padding-bottom:6px;border-bottom:1px solid var(--border)">
+      <div class="sec-ttl">Diagnostics de synergie Macro × Desk</div>
+    </div>
+    <div class="syn-note">Constats d'affichage uniquement : aucun état, aucun score, aucune
+      éligibilité de ce rapport n'est modifié par cette section.</div>
+    <div class="syn-block">
+      <div class="syn-ttl">Force macro (momentum prix D1) ↔ Thème desk (structure MTF)</div>
+      {div_html}
+    </div>
+    <div class="syn-block">
+      <div class="syn-ttl">Intersection priorités macro × setups validés desk</div>
+      {inter_html}
+    </div>
+  </div>"""
+
+
+_CSS = """
+:root{
+  --font-mono:'DejaVu Sans Mono','Consolas','Liberation Mono',monospace;
+  --font-sans:'DejaVu Sans','Segoe UI',Helvetica,Arial,sans-serif;
+  --royal:#1B45B4;--royal-dark:#0D1F4E;
+  --green:#0EA968;--green-soft:#E9FBF3;
+  --amber:#D97B15;--amber-soft:#FDF3E4;
+  --red:#DC2626;--red-soft:#FDECEC;
+  --slate:#5B6B94;--bg:#F4F6FC;--card:#FFFFFF;--border:#E1E7F5;
+  --blocked:#3F1D1D;--blocked-soft:#F3E5E5;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font-family:var(--font-sans);color:var(--royal-dark)}
+#page{max-width:1160px;margin:0 auto;padding:0 18px 28px}
+#pdf-fab{position:fixed;top:16px;right:16px;z-index:50;text-align:right}
+#pdf-fab button{font-family:var(--font-mono);font-size:11px;font-weight:700;padding:10px 16px;
+  border-radius:8px;cursor:pointer;border:none;background:var(--royal);color:#fff;letter-spacing:.3px}
+#pdf-fab button:hover{background:var(--royal-dark)}
+.page-header{display:flex;justify-content:space-between;align-items:center;
+  padding:20px 0 14px;border-bottom:3px solid var(--royal-dark)}
+.header-left{display:flex;align-items:center;gap:12px}
+.logo-marker{width:42px;height:42px;border-radius:5px;background:#FFFFFF;border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sys-label{font-family:var(--font-mono);font-size:9px;color:var(--slate);letter-spacing:1px;text-transform:uppercase}
+.sys-name{font-family:var(--font-mono);font-size:19px;font-weight:700;color:var(--royal-dark);letter-spacing:.5px}
+.sys-desc{font-family:var(--font-mono);font-size:9.5px;color:var(--royal);letter-spacing:.4px;margin-top:1px}
+.header-right{text-align:right}
+.briefing-label{font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--royal);
+  letter-spacing:.5px;text-transform:uppercase}
+.briefing-sub{font-size:10.5px;color:var(--slate);margin-top:2px}
+.page-subbar{display:flex;gap:18px;flex-wrap:wrap;padding:9px 0;font-family:var(--font-mono);
+  font-size:10px;color:var(--slate);border-bottom:1px solid var(--border);margin-bottom:20px}
+.page-subbar .confidential{color:var(--red);font-weight:700;letter-spacing:.4px}
+.freshness-warn{background:var(--blocked-soft);color:var(--blocked);padding:10px 14px;
+  border-radius:8px;border:1px solid var(--red-soft);font-size:11px;font-weight:700;
+  margin-bottom:16px;font-family:var(--font-mono)}
+.meta-dates{font-family:var(--font-mono);font-size:10px;color:var(--slate);
+  background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;line-height:1.8}
+.meta-dates b{color:var(--royal-dark)}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 16px}
+.kpi .lbl{font-family:var(--font-mono);font-size:9px;text-transform:uppercase;color:var(--slate);letter-spacing:.6px}
+.kpi .val{font-family:var(--font-mono);font-size:21px;font-weight:700;color:var(--royal);margin-top:5px}
+.kpi .hint{font-size:10px;color:var(--slate);margin-top:3px}
+.kpi.top{border-top:3px solid var(--green)}
+.kpi.mid{border-top:3px solid var(--amber)}
+.kpi.low{border-top:3px solid var(--blocked)}
+.kpi.royal{border-top:3px solid var(--royal)}
+table{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);
+      border:1px solid var(--border);border-radius:12px;overflow:hidden;
+      box-shadow:0 4px 14px rgba(13,31,78,.06)}
+th{background:var(--royal-dark);color:#fff;font-family:var(--font-mono);font-size:9.5px;
+   text-align:left;padding:11px 12px;letter-spacing:.3px;text-transform:uppercase}
+td{padding:12px 14px;font-size:11.5px;border-top:1px solid var(--border);vertical-align:top}
+tr:nth-child(even) td{background:#FAFBFF}
+.pair{font-family:var(--font-mono);font-weight:700;font-size:14px}
+.levels{font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--royal-dark);margin-top:4px;line-height:1.5}
+.cardmeta{font-family:var(--font-mono);font-size:9px;color:var(--slate);margin-top:2px}
+.dir-long{color:var(--green);font-size:10px;font-family:var(--font-mono)}
+.dir-short{color:var(--red);font-size:10px;font-family:var(--font-mono)}
+.dir-neutral{color:var(--slate);font-size:10px;font-family:var(--font-mono)}
+.badge{font-family:var(--font-mono);font-size:9px;padding:3px 8px;border-radius:5px;
+       display:inline-block;font-weight:700;letter-spacing:.3px}
+.badge-asset{background:#EEF1FA;color:var(--slate);margin-top:3px}
+.b-eligible{background:var(--green-soft);color:var(--green)}
+.b-watch{background:var(--amber-soft);color:var(--amber)}
+.b-reject{background:var(--red-soft);color:var(--red)}
+.b-blocked{background:var(--blocked-soft);color:var(--blocked)}
+.verdict-line{display:block;margin-bottom:3px;font-size:10.5px}
+.v-confluence{color:var(--green);font-weight:700}
+.v-conflit{color:var(--red);font-weight:700}
+.v-neutre{color:var(--slate);font-weight:700}
+.v-indetermine{color:var(--amber);font-weight:700}
+.detail{font-size:10.5px;color:var(--slate);line-height:1.55}
+.muted{color:var(--slate);font-style:italic}
+.advisory-list{margin:0;padding-left:14px;line-height:1.6}
+.factor{font-size:11px;font-weight:700;color:var(--royal-dark)}
+.syn-note{font-family:var(--font-mono);font-size:9.5px;color:var(--slate);margin:8px 0 10px}
+.syn-block{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--royal);
+  border-radius:8px;padding:10px 14px;margin-bottom:10px}
+.syn-ttl{font-family:var(--font-mono);font-size:9.5px;font-weight:700;color:var(--royal);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.footer-note{margin-top:16px;font-size:10px;color:var(--slate);font-family:var(--font-mono);
+  border-top:1px solid var(--border);padding-top:10px}
+@media print{
+  @page{size:landscape;margin:8mm}
+  body{padding:6px;background:#fff}
+  #pdf-fab{display:none}
+  td,th{font-size:9px;padding:6px}
+  table,.kpi{box-shadow:none}
+}
+@media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:1040px) and (min-width:761px){.kpis{grid-template-columns:repeat(3,1fr)}}
+"""
+
+
+def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Decision, ...],
+                   generated_at: datetime | None = None,
+                   macro_channel_status: str | None = None,
+                   macro_freshness_msg: str | None = None,
+                   desk_banners: tuple[str, ...] = (),
+                   strength_theme_divergences: tuple[StrengthThemeDivergence, ...] = (),
+                   macro_intersection_msg: str | None = None) -> str:
+    """Génère le rapport HTML complet. Fonction quasi pure : seule dépendance
+    externe est l'horodatage de génération (injectable pour les tests).
+
+    macro_channel_status: déclaration du statut du canal macro (G1/B-4).
+    Si None, déduit de macro.priority_setups.
+
+    macro_freshness_msg: message d'alerte de fraîcheur du document MACRO
+    (O-8/R-10) — symétrique de l'audit de fraîcheur desk. None (défaut)
+    préserve le comportement précédent.
+
+    desk_banners: bannières document-niveau du desk (K-3/R-3/G4). Tuple vide
+    (défaut) : rendu strictement identique à avant ce paramètre.
+
+    strength_theme_divergences / macro_intersection_msg (ICF v2, P3/P4) :
+    diagnostics de synergie, PUREMENT documentaires. Valeurs par défaut
+    neutres : un appelant qui ne les fournit pas obtient le même rapport
+    qu'avant, augmenté d'une section qui déclare explicitement l'absence de
+    diagnostic (jamais un silence ambigu)."""
+    if not decisions:
+        raise RenderError("Aucune décision à rendre — decisions est vide.")
+
+    generated_at = generated_at or datetime.now(timezone.utc)
+
+    # PATCH-B2/F04 : alerte de fraîcheur documentaire affichée dans le rapport.
+    freshness_msg = audit_document_freshness(desk, generated_at)
+    freshness_html = ""
+    if freshness_msg:
+        freshness_html = f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR DESK : {_esc(freshness_msg)}</div>'
+    # O-8/R-10 FIX : la couche Macro n'avait aucun audit de fraîcheur symétrique.
+    if macro_freshness_msg:
+        freshness_html += f'<div class="freshness-warn">⚠️ ALERTE FRAÎCHEUR MACRO : {_esc(macro_freshness_msg)}</div>'
+    # K-3/R-3/G4 FIX : bannières document-niveau du desk.
+    banners_html = "".join(
+        f'<div class="freshness-warn">⚠️ ALERTE DESK (bannière document) : {_esc(b)}</div>'
+        for b in desk_banners
+    )
+    freshness_html += banners_html
+
+    ordered = sorted(decisions, key=lambda d: _STATE_ORDER[d.state])
+
+    counts = {s: 0 for s in DecisionState}
+    for d in ordered:
+        counts[d.state] += 1
+
+    # P3-3 : lookup pair -> carte setup validée (les niveaux n'existent QUE
+    # pour les lignes ayant une carte ; les lignes rejetées n'ont pas de
+    # prix publiés par le Desk — rien à afficher, rien d'inventé).
+    by_pair = {s.pair: s for s in desk.setups}
+    rows_html = "\n".join(_render_row(d, by_pair.get(d.pair)) for d in ordered)
+
+    # PATCH-P2-XSSESC (audit forensique 09/09, AC-16) : les paires viennent du
+    # document desk (input non fiable). Les cellules du tableau passaient par
+    # _esc ; les trois KPI de têtes construisaient leur hint en brut — un
+    # .pair « EUR/USD<img src=x onerror=…> » s'exécutait dans le rapport.
+    # Même échappement partout ; le rendu des paires légitimes est inchangé.
+    eligible_pairs = _esc(", ".join(d.pair for d in ordered if d.state == DecisionState.ELIGIBLE)) or "aucun"
+    watch_pairs = _esc(", ".join(d.pair for d in ordered if d.state == DecisionState.WATCH)) or "aucun"
+    blocked_pairs = _esc(", ".join(
+        d.pair for d in ordered if d.state in (DecisionState.BLOCKED_DATA, DecisionState.BLOCKED_RISK)
+    )) or "aucun"
+
+    total_advisories, actionable_advisories, informative_advisories = _advisory_breakdown(ordered)
+
+    # PATCH-DUALREGIME (Proposition 6 — Règle Absolue 4). Le Desk porte son
+    # propre « régime » (état calendaire), distinct du régime Macro (état de
+    # marché). On les nomme distinctement plutôt que d'afficher un seul
+    # « Régime » qui laisserait croire à une source unique. getattr défensif.
+    _desk_regime_value = getattr(desk, "macro_regime_label", None)
+    _desk_regime_html = (
+        f'Régime desk (état calendaire) : <b>{_esc(_desk_regime_value)}</b>'
+        if _desk_regime_value else
+        'Régime desk (état calendaire) : <span class="muted">non disponible</span>'
+    )
+
+    # ICF v2, Proposition 2 : rappel document-niveau de la couverture calendaire.
+    _cov = getattr(desk, "calendar_coverage", {})
+    _uncovered = sorted(_cov.get("uncovered", ()) or ())
+    _covered = sorted(_cov.get("covered", ()) or ())
+    # HARNESS P3-2 : le producteur déclare l'intégrité du flux calendaire
+    # (`truncated`, `feed_end_utc`, `horizon_h`) dans le même bloc JSON ;
+    # jusqu'ici seule la prose de la bannière le portait et le consommateur
+    # jetait le signal structuré — un horizon tronqué se rendait comme une
+    # couverture simplement « complète ». Divulgation pure, aucun état ne la
+    # consomme. Bloc ancien/sans flag -> suffixe vide, rendu identique à avant.
+    _covmeta = getattr(desk, "calendar_coverage_meta", {}) or {}
+    _trunc_note = ""
+    if str(_covmeta.get("truncated", "")).lower() == "true":
+        _hz = _covmeta.get("horizon_h") or _covmeta.get("horizon_hours")
+        try:
+            _hz_txt = f", horizon {int(float(_hz))} h" if _hz else ""
+        except (TypeError, ValueError):
+            _hz_txt = ""
+        _trunc_note = (
+            ' — <b>FLUX TRONQUÉ</b> (fin de couverture déclarée : '
+            f'{_esc(str(_covmeta.get("feed_end_utc", "?")))}{_hz_txt})'
+        )
+    # PATCH-P2-COVDISPLAY (audit forensique 09/09, AC-20) : « uncovered vide »
+    # se rendait comme « le document ne déclare rien » — une couverture
+    # déclarée COMPLÈTE (covered non vide, uncovered vide) était donc affichée
+    # « non déclarée ». Les deux cas sont désormais distincts.
+    if _uncovered:
+        _coverage_html = (
+            f'Couverture calendaire desk : <b>{len(_uncovered)}</b> devise(s) HORS couverture '
+            f'({_esc(", ".join(_uncovered))}) — « OK » y signifie « non mesuré »{_trunc_note}'
+        )
+    elif _covered:
+        _coverage_html = (
+            f'Couverture calendaire desk : <b>déclarée complète</b> '
+            f'({_esc(", ".join(_covered))}){_trunc_note}'
+        )
+    else:
+        _coverage_html = (
+            'Couverture calendaire desk : <span class="muted">non déclarée par le document</span>'
+            f'{_trunc_note}'
+        )
+
+    # PATCH-P2-NONECONF (audit forensique 09/09, AC-19) : le rendu affichait
+    # littéralement « confiance None% » quand le libellé du macro ne portait
+    # pas de confiance — un artefact de formatage lu comme une donnée.
+    _conf_txt = (
+        f'confiance {macro.regime_confidence_pct} %'
+        if macro.regime_confidence_pct is not None
+        else 'confiance non déclarée'
+    )
+
+    # PATCH-P2-IPSDATE-DISPLAY (audit forensique 09/09, AC-13) : le comité
+    # promeut sur des chiffres COT dont la date de relevé ne franchissait plus
+    # la frontière du parsing (voir macro_parser._parse_ips). Une fois extraite,
+    # elle EST divulguée ici — pur affichage, aucune logique dans ce module.
+    _ips_dates = {d.ips_date for d in macro.currencies.values() if d.ips_date}
+    _ips_prov = (
+        f'Provenance IPS (relevé) : <b>{_esc(" · ".join(sorted(_ips_dates)))}</b>'
+        if _ips_dates else
+        'Provenance IPS : <span class="muted">date de relevé non déclarée par le document</span>'
+    )
+
+    grid_version = ordered[0].grid_version
+
+    synergy_html = _render_synergy_section(strength_theme_divergences, macro_intersection_msg)
+
+    html_out = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLUESTAR FX Committee Decision Report</title>
+<style>{_CSS}</style>
+</head>
+<body>
+<div id="pdf-fab"><button onclick="window.print()">📥 Télécharger PDF</button></div>
+<div id="page">
+  <div class="page-header">
+    <div class="header-left">
+      <div class="logo-marker">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 17.27L18.18 21L16.54 13.97L22 9.24L14.81 8.63L12 2L9.19 8.63L2 9.24L7.46 13.97L5.82 21L12 17.27Z" fill="#1B45B4"/>
+        </svg>
+      </div>
+      <div>
+        <div class="sys-label">BLUESTAR SYSTEM</div>
+        <div class="sys-name">BLUESTAR</div>
+        <div class="sys-desc">COMITÉ DE SÉLECTION — CROISEMENT MACRO × TECHNIQUE</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="briefing-label">RAPPORT DE DÉCISION</div>
+      <div class="briefing-sub">Généré le {_esc(generated_at.strftime('%Y-%m-%d %H:%M UTC'))}</div>
+    </div>
+  </div>
+  <div class="page-subbar">
+    <span>📅 Doc macro : {_esc(macro.report_datetime)} {_esc(macro.report_timezone)}</span>
+    <span>📄 Doc desk : {_esc(desk.report_datetime)} {_esc(desk.report_timezone)}</span>
+    <span class="confidential">● CONFIDENTIEL</span>
+    <span style="color:var(--amber);margin-left:auto">🔧 Macro : {_esc(macro_channel_status or "ACTIF")}</span>
+  </div>
+
+  {freshness_html}
+
+  <div class="meta-dates">
+    Régime macro (état de marché) : <b>{_esc(macro.regime)}</b> ({_conf_txt}) ·
+    {_ips_prov} ·
+    {_desk_regime_html} ·
+    {_coverage_html} ·
+    Univers desk : <b>{desk.universe_total}</b> actifs · <b>{desk.universe_evaluated}</b> franchissent les gates · <b>{len(desk.setups)}</b> validés · <b>{len(desk.rejected)}</b> rejetés ·
+    Décisions comité : <b>{len(ordered)}/{desk.universe_total}</b> comité · <b>{actionable_advisories}</b> advisories actionnables · <b>{informative_advisories}</b> informatives
+  </div>
+
+  <div class="kpis">
+    <div class="kpi top"><div class="lbl">Éligibles</div><div class="val">{counts[DecisionState.ELIGIBLE]}</div><div class="hint">{eligible_pairs}</div></div>
+    <div class="kpi mid"><div class="lbl">Watch</div><div class="val">{counts[DecisionState.WATCH]}</div><div class="hint">{watch_pairs}</div></div>
+    <div class="kpi low"><div class="lbl">Bloqués</div><div class="val">{counts[DecisionState.BLOCKED_DATA] + counts[DecisionState.BLOCKED_RISK]}</div><div class="hint">{blocked_pairs}</div></div>
+    <div class="kpi low"><div class="lbl">Rejetés</div><div class="val">{counts[DecisionState.REJECT]}</div><div class="hint">—</div></div>
+    <div class="kpi royal"><div class="lbl">Total advisories</div><div class="val">{total_advisories}</div><div class="hint">{actionable_advisories} actionnables · {informative_advisories} informatives</div></div>
+    <div class="kpi royal"><div class="lbl">Grid version</div><div class="val">{grid_version}</div><div class="hint">—</div></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Setup / Direction</th>
+        <th>Verdicts jambe</th>
+        <th>Advisory</th>
+        <th>État</th>
+        <th>Facteur limitant</th>
+        <th>Code source</th>
+      </tr>
+    </thead>
+    <tbody>
+{rows_html}
+    </tbody>
+  </table>
+
+{synergy_html}
+
+  <div class="footer-note">
+    Rapport généré par bluestar-committee v{_COMMITTEE_VERSION} · grille {_esc(grid_version)} · Mode passif (aucune logique de décision dans ce module) ·
+    <b>ELIGIBLE ≠ EXECUTER</b> — outil déterministe d'aide à la décision : aucune prédiction, aucune garantie ; toute action reste sous arbitrage humain. ·
+    Données desk : {desk.report_datetime} {desk.report_timezone} ·
+    Données macro : {macro.report_datetime} {macro.report_timezone}
+  </div>
+</div>
+</body>
+</html>"""
+
+    return html_out
