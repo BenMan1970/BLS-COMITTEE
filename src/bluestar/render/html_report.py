@@ -92,7 +92,72 @@ def _advisory_breakdown(ordered: tuple[Decision, ...]) -> tuple[int, int, int]:
     return total, actionable, total - actionable
 
 
-def _render_row(d: Decision) -> str:
+def _fmt_level(v: float | None) -> str:
+    """Format monospace compact des prix (0.80975 → « 0.80975 », 4350.0 →
+    « 4350 ») ; None → tiret graphiquement neutre, jamais « None »."""
+    return "—" if v is None else f"{v:g}"
+
+
+def _levels_html(setup) -> str:
+    """HARNESS P3-3 (2026-09-11) : les prix exécutables publiés par le Desk
+    (Entry/SL/TP1/TP2/RR) étaient extraits en partie et rendus nulle part —
+    une décision du comité sans niveaux est inopérante pour l'exécution.
+    Divulgation pure : aucune valeur de cette ligne ne provient d'une règle
+    du comité ; ce sont les nombres du document source, passés tels quels
+    (échappement compris). Setup absent (ligne rejetée, pas de carte) → rien.
+    """
+    if setup is None:
+        return ""
+    if all(getattr(setup, a, None) is None for a in
+           ("entry", "stop_loss", "take_profit_1", "take_profit_2", "risk_reward")):
+        return ""  # carte sans AUCUN niveau chiffré : pas de ligne vide
+    parts = []
+    entry = _fmt_level(getattr(setup, "entry", None))
+    etype = getattr(setup, "entry_type", None)
+    suffix = f' <span class="muted">({_esc(str(etype))})</span>' if etype else ""
+    parts.append(f"Entrée {entry}{suffix}")
+    for lbl, attr in (("SL", "stop_loss"), ("TP1", "take_profit_1"),
+                      ("TP2", "take_profit_2"), ("R:R", "risk_reward")):
+        parts.append(f"{lbl} {_fmt_level(getattr(setup, attr, None))}")
+    return '<div class="levels">' + " · ".join(parts) + "</div>"
+
+
+def _card_meta_html(setup) -> str:
+    """P3-5 (11/09/2026, arbitrage « applique ce que tu penses améliorer le
+    committee ») : le Desk publie sa propre évaluation de chaque setup validé —
+    note de conviction, Quality, MTF %, âge, cluster — et le comité ne
+    l'affichait nulle part. Même doctrine que P3-3 : DIVULGATION PURE, aucun
+    de ces nombres ne sort d'une règle du comité ; tous viennent du document
+    source et sont passés tels quels. Champ absent -> segment omis (jamais de
+    « None »). Setup absent (ligne rejet, pas de carte) -> rien."""
+    if setup is None:
+        return ""
+    parts = []
+    grade = getattr(setup, "conviction_grade", None)
+    value = getattr(setup, "conviction_value", None)
+    if grade:
+        txt = f"Conviction {_esc(str(grade))}"
+        if value is not None:
+            txt += f" ({value:.2f})"
+        parts.append(txt)
+    quality = getattr(setup, "quality", None)
+    if quality:
+        parts.append(f"Qualité {_esc(str(quality))}")
+    mtf = getattr(setup, "mtf_pct", None)
+    if mtf is not None:
+        parts.append(f"MTF {mtf:g} %")
+    age = getattr(setup, "age_days", None)
+    if age is not None:
+        parts.append(f"Âge {age} j")
+    cluster = getattr(setup, "cluster_tag", None)
+    if cluster:
+        parts.append(f"Cluster {_esc(str(cluster))}")
+    if not parts:
+        return ""
+    return '<div class="cardmeta">' + " · ".join(parts) + "</div>"
+
+
+def _render_row(d: Decision, setup=None) -> str:
     badge_class = _STATE_BADGE_CLASS[d.state]
     legs_html = ""
     if d.legs:
@@ -127,7 +192,7 @@ def _render_row(d: Decision) -> str:
 
     return f"""
       <tr>
-        <td><span class="pair">{_esc(d.pair)}</span><br><span class="{dir_class}">{dir_arrow}</span>{asset_badge_html}</td>
+        <td><span class="pair">{_esc(d.pair)}</span><br><span class="{dir_class}">{dir_arrow}</span>{asset_badge_html}{_levels_html(setup)}{_card_meta_html(setup)}</td>
         <td>{legs_html}</td>
         <td class="detail">{advisories_html if advisories_html else '<span class="muted">aucun</span>'}</td>
         <td><span class="badge {badge_class}">{_esc(d.state.value)}</span></td>
@@ -238,6 +303,8 @@ th{background:var(--royal-dark);color:#fff;font-family:var(--font-mono);font-siz
 td{padding:12px 14px;font-size:11.5px;border-top:1px solid var(--border);vertical-align:top}
 tr:nth-child(even) td{background:#FAFBFF}
 .pair{font-family:var(--font-mono);font-weight:700;font-size:14px}
+.levels{font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--royal-dark);margin-top:4px;line-height:1.5}
+.cardmeta{font-family:var(--font-mono);font-size:9px;color:var(--slate);margin-top:2px}
 .dir-long{color:var(--green);font-size:10px;font-family:var(--font-mono)}
 .dir-short{color:var(--red);font-size:10px;font-family:var(--font-mono)}
 .dir-neutral{color:var(--slate);font-size:10px;font-family:var(--font-mono)}
@@ -327,7 +394,11 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     for d in ordered:
         counts[d.state] += 1
 
-    rows_html = "\n".join(_render_row(d) for d in ordered)
+    # P3-3 : lookup pair -> carte setup validée (les niveaux n'existent QUE
+    # pour les lignes ayant une carte ; les lignes rejetées n'ont pas de
+    # prix publiés par le Desk — rien à afficher, rien d'inventé).
+    by_pair = {s.pair: s for s in desk.setups}
+    rows_html = "\n".join(_render_row(d, by_pair.get(d.pair)) for d in ordered)
 
     # PATCH-P2-XSSESC (audit forensique 09/09, AC-16) : les paires viennent du
     # document desk (input non fiable). Les cellules du tableau passaient par

@@ -642,7 +642,17 @@ def _parse_rejected_table(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
                 else "non disponible dans les documents fournis")
         direction = _extract_reject_direction(row, pair)
         reject_code = code_tag.get_text(strip=True)
-        detail = row.get_text(" | ", strip=True)
+        # La cellule « Détail » (4e colonne) porte le motif de rejet brut du
+        # Desk. On la lit de préférence au texte complet de la ligne, qui
+        # répète paire / direction / code de rejet et laisse le RSI sans
+        # libellé dans le facteur limitant affiché (audit round 13/10/2026).
+        # Cellule absente ou vide (document ancien / malformé) -> repli sur
+        # le comportement d'origine : aucune information perdue.
+        detail = ""
+        if len(cells) > 3:
+            detail = cells[3].get_text(" ", strip=True)
+        if not detail:
+            detail = row.get_text(" | ", strip=True)
         out.append(DeskRejectedSetup(pair=pair, direction=direction,
                                      reject_code=reject_code, detail=detail))
     return out

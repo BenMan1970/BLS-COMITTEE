@@ -133,9 +133,13 @@ def test_grid_version_is_pinned(decisions):
     optionnelle dans regime_bias), R-14 (normalisation des paires d'indices),
     G6 (advisory marche fermee) sont des changements de comportement reels
     de la grille depuis v2.3, jamais accompagnes d'un bump avant ce round --
-    corrige ici en meme temps que le code."""
+    corrige ici en meme temps que le code.
+    v2.5 (04/08/2026, ICF v2 : cap_reason, couverture calendaire, factors_missing)
+    puis v2.6 (09/09/2026, forensique : AC-01/AC-03/AC-10/AC-18) ont a nouveau
+    change la sortie de la grille -- verrou mis a jour a chaque bump, cf. le
+    registre versionne en tete de decide/selection_grid.py."""
     for d in decisions.values():
-        assert d.grid_version == "bluestar-decide-v2.4"
+        assert d.grid_version == "bluestar-decide-v2.6"
 
 
 # --- Regression : invariant 33/33 (round d'audit du 27/07/2026) ------------

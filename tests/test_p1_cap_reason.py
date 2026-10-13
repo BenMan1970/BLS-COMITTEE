@@ -97,6 +97,8 @@ def test_augment_limiting_factor_injects_cap_reason():
     setup = DeskSetup(
         pair="GBP/AUD", direction=Direction.LONG,
         conviction_grade="A", conviction_value=0.68,
+        cluster_tag="isolated:GBP/AUD", quality="A", mtf_pct=62.0,
+        age_days=3, risk_reward=2.5, factors={}, entry=None, stop_loss=None,
         cap_reason="risque macro NON ÉVALUÉ (couverture calendaire insuffisante)",
     )
     decision = _augment_limiting_factor_with_cap_reason(_eligible_decision(), setup)
@@ -124,6 +126,8 @@ def test_augment_limiting_factor_idempotent():
     setup = DeskSetup(
         pair="GBP/AUD", direction=Direction.LONG,
         conviction_grade="A", conviction_value=0.68,
+        cluster_tag="isolated:GBP/AUD", quality="A", mtf_pct=62.0,
+        age_days=3, risk_reward=2.5, factors={}, entry=None, stop_loss=None,
         cap_reason="risque macro NON ÉVALUÉ",
     )
     once = _augment_limiting_factor_with_cap_reason(_eligible_decision(), setup)
@@ -138,6 +142,8 @@ def test_augment_limiting_factor_preserves_real_limiting_factor():
     setup = DeskSetup(
         pair="EUR/CAD", direction=Direction.LONG,
         conviction_grade="AA", conviction_value=0.68,
+        cluster_tag="isolated:EUR/CAD", quality="AA", mtf_pct=58.0,
+        age_days=9, risk_reward=1.9, factors={}, entry=None, stop_loss=None,
         cap_reason="risque macro NON ÉVALUÉ (couverture calendaire insuffisante)",
     )
     base = Decision(
