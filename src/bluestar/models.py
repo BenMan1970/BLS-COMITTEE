@@ -177,6 +177,14 @@ class DeskRejectedSetup:
     direction: Direction | None
     reject_code: str
     detail: str
+    # CORRECTION R-A1 (mandat V2, 13/10/2026) : texte brut de la ligne <tr>
+    # complete, necessaire a la contre-reference CLUSTER_DUP dans decide_all
+    # (re.search du representant "= PAIRE/PAIRE"). Depuis la correction A3 du
+    # 13/10, `detail` lit la cellule Detail seule : si un document Desk place
+    # le "= PAIRE" dans une autre cellule, l XREF disparaissait silencieusement.
+    # Ce champ ne sert QU au repli de ce regex ; aucun rendu, aucun etat, aucun
+    # compteur ne le lit. Defaut vide : decide_all replie sur `detail`.
+    row_text: str = ""
 
 
 @dataclass(frozen=True)

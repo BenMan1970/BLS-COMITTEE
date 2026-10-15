@@ -507,6 +507,15 @@ def _parse_setup(block: Tag) -> DeskSetup:
         try:
             setup = DeskSetup(**base_kwargs, **{k: optional[k] for k in tier})
         except TypeError as exc:
+            # E9.4 (mandat V2, classe A) : meme defaut que E9.2 sur la cascade
+            # snapshot. Absorber TOUT `TypeError` faisait disparaitre en silence
+            # des champs pourtant extraits du document (take_profit_1/2 -> None),
+            # en accusant a tort `bluestar.models` de ne pas les declarer. On
+            # n absorbe que l erreur que la cascade sait traiter : un modele plus
+            # ancien que le parser, qui refuse un champ en NOMMANT le mot-cle
+            # inconnu et appartenant au tier courant.
+            if not _is_unknown_field_type_error(exc, tier):
+                raise
             last_exc = exc
             continue
 
@@ -653,8 +662,11 @@ def _parse_rejected_table(soup: BeautifulSoup) -> list[DeskRejectedSetup]:
             detail = cells[3].get_text(" ", strip=True)
         if not detail:
             detail = row.get_text(" | ", strip=True)
+        # R-A1 : repli XREF. row_text conserve le texte brut de la ligne pour
+        # le regex de contre-reference CLUSTER_DUP (decide_all). Aucun rendu.
         out.append(DeskRejectedSetup(pair=pair, direction=direction,
-                                     reject_code=reject_code, detail=detail))
+                                     reject_code=reject_code, detail=detail,
+                                     row_text=row.get_text(" | ", strip=True)))
     return out
 
 
@@ -791,6 +803,21 @@ _SNAPSHOT_FIELD_HINT = {
 }
 
 
+
+def _is_unknown_field_type_error(exc: TypeError, tier: tuple[str, ...]) -> bool:
+    """E9.2 : distingue le seul TypeError que la cascade sait traiter.
+
+    True seulement si le message NOMME un mot-cle inconnu ET que ce mot-cle
+    appartient au tier courant (donc : le modele est plus ancien que le parser).
+    Un TypeError interne a DeskSnapshot -- message sans "unexpected keyword
+    argument", ou nommant un champ hors tier -- ne matche pas : il remonte.
+    """
+    msg = str(exc)
+    if "unexpected keyword argument" not in msg:
+        return False
+    return any(re.search(rf"[\x27\x22]{re.escape(key)}[\x27\x22]", msg) for key in tier)
+
+
 def parse_desk(html: str) -> DeskSnapshot:
     soup = BeautifulSoup(html, "html.parser")
 
@@ -836,10 +863,21 @@ def parse_desk(html: str) -> DeskSnapshot:
 
     result: DeskSnapshot | None = None
     last_exc: TypeError | None = None
+    unknown_tier_exc: TypeError | None = None
     for tier in _SNAPSHOT_OPTIONAL_TIERS:
         try:
             result = DeskSnapshot(**base_kwargs, **{k: optional[k] for k in tier})
         except TypeError as exc:
+            # E9.2 (mandat V2, classe A) : la cascade ne doit absorber QUE
+            # l erreur qu elle sait traiter -- un modele plus ancien que le
+            # parser, qui refuse un champ en NOMMANT le mot-cle inconnu.
+            # Tout autre TypeError vient de l INTERIEUR de DeskSnapshot (bug de
+            # validation, type inattendu) : il signalait a tort une
+            # desynchronisation modele/parser et degradait le schema EN
+            # SILENCE (calendar_coverage_meta perdu -> horizon et banniere de
+            # troncature disparaissaient du rapport). Il doit remonter.
+            if not _is_unknown_field_type_error(exc, tier):
+                raise
             last_exc = exc
             continue
         for key, val in optional.items():

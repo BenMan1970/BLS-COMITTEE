@@ -169,7 +169,18 @@ def _render_row(d: Decision, setup=None) -> str:
                 f'{vlabel} — {_esc(leg.detail)}</span>'
             )
     else:
-        legs_html = '<span class="verdict-line"><span class="v-neutre">—</span> Non applicable / non évalué</span>'
+        # R-A2 (mandat V2, 13/10/2026) : deux causes distinctes, un seul
+        # libellé auparavant. Aucun changement sur `legs`, ni sur les états :
+        # affichage seul.
+        if d.source_reject_code:
+            _lbl = (f"Non évalué par la grille — rejeté en amont "
+                    f"(code {_esc(d.source_reject_code)}) ; "
+                    f"positionnement IPS : voir Advisory")
+        elif d.legs == () and d.asset_class != AssetClass.FX_PAIR:
+            _lbl = "Sans objet — instrument en jambe unique (biais de régime)"
+        else:
+            _lbl = "Non évalué par la grille"
+        legs_html = f'<span class="verdict-line"><span class="v-neutre">—</span> {_lbl}</span>'
 
     advisories_html = ""
     if d.advisories:
@@ -439,7 +450,10 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
     if str(_covmeta.get("truncated", "")).lower() == "true":
         _hz = _covmeta.get("horizon_h") or _covmeta.get("horizon_hours")
         try:
-            _hz_txt = f", horizon {int(float(_hz))} h" if _hz else ""
+            # R-A6 (mandat V2, 13/10/2026) : arrondi et non troncature.
+            # int(90.45) -> 90 h (90 h 27 min) : la troncature sous-estime
+            # silencieusement la couverture déclarée. Affichage seul.
+            _hz_txt = f", horizon {round(float(_hz))} h" if _hz else ""
         except (TypeError, ValueError):
             _hz_txt = ""
         _trunc_note = (
@@ -567,8 +581,8 @@ def render_report(desk: DeskSnapshot, macro: MacroSnapshot, decisions: tuple[Dec
   <div class="footer-note">
     Rapport généré par bluestar-committee v{_COMMITTEE_VERSION} · grille {_esc(grid_version)} · Mode passif (aucune logique de décision dans ce module) ·
     <b>ELIGIBLE ≠ EXECUTER</b> — outil déterministe d'aide à la décision : aucune prédiction, aucune garantie ; toute action reste sous arbitrage humain. ·
-    Données desk : {desk.report_datetime} {desk.report_timezone} ·
-    Données macro : {macro.report_datetime} {macro.report_timezone}
+    Données desk : {_esc(str(desk.report_datetime))} {_esc(str(desk.report_timezone))} ·
+    Données macro : {_esc(str(macro.report_datetime))} {_esc(str(macro.report_timezone))}
   </div>
 </div>
 </body>

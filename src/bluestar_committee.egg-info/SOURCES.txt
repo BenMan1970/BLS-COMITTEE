@@ -1,4 +1,3 @@
-LICENSE
 README.md
 pyproject.toml
 src/bluestar/__init__.py
@@ -18,8 +17,15 @@ src/bluestar_committee.egg-info/dependency_links.txt
 src/bluestar_committee.egg-info/entry_points.txt
 src/bluestar_committee.egg-info/requires.txt
 src/bluestar_committee.egg-info/top_level.txt
+tests/test_audit_class_a.py
 tests/test_cli.py
 tests/test_decide.py
 tests/test_extract_desk.py
 tests/test_extract_macro.py
+tests/test_p1_cap_reason.py
+tests/test_p2_calendar_coverage.py
+tests/test_p5_advisory_breakdown.py
+tests/test_p6_dual_regime.py
+tests/test_ra1_clusterdup_xref.py
+tests/test_ra2_ra3_ra5_coherence.py
 tests/test_render.py

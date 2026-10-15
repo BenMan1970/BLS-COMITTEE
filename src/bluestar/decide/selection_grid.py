@@ -299,9 +299,19 @@ def _implied_macro_currency_bias(macro: MacroSnapshot) -> dict[str, list[tuple[D
     desk ne porte sur GBP/USD lui-même."""
     bias: dict[str, list[tuple[Direction, str, int]]] = {}
     for p in macro.priority_setups:
-        if "/" not in p.pair:
+        # E9.1 (mandat V2, classe A) : la garde "pas de slash" ne suffisait pas.
+        # `"A/B/C".split("/")` rend 3 segments et le deballage en 2 variables
+        # levait `ValueError: too many values to unpack` -- un crash de tout le
+        # cycle pour une paire malformee du document MACRO. On exige donc
+        # EXACTEMENT deux segments NON VIDES, seule forme qui a un sens pour une
+        # paire de devises ; tout le reste est ignore, exactement comme les paires
+        # sans slash : aucune these implicite, aucune invention.
+        parts = p.pair.split("/")
+        if len(parts) != 2:
             continue
-        base, quote = p.pair.split("/")
+        base, quote = parts
+        if not base or not quote:
+            continue
         base_dir = p.direction
         quote_dir = Direction.SHORT if base_dir == Direction.LONG else Direction.LONG
         bias.setdefault(base, []).append((base_dir, p.pair, p.conviction_stars))
@@ -352,7 +362,19 @@ def technical_currency_advisories(
         for sig in correlation_groups.get(currency, ()):
             if sig.symbol == setup.pair or sig.direction is None or "/" not in sig.symbol:
                 continue  # même paire, signal Neutral, ou instrument non pairé
-            sig_base, sig_quote = sig.symbol.split("/")
+            # E9.3 (mandat V2, classe A) : même classe de défaut que E9.1.
+            # La garde « pas de slash » ci-dessus ne suffisait pas : un symbole
+            # à 2+ « / » (ex. "A/B/C") rendait 3 segments et le déballage en 2
+            # variables levait `ValueError: too many values to unpack` -> crash
+            # de tout le cycle. On exige exactement deux segments NON VIDES,
+            # comme pour `_implied_macro_currency_bias` ; tout le reste est
+            # ignoré comme un instrument non pairé (aucune invention).
+            _sym_parts = sig.symbol.split("/")
+            if len(_sym_parts) != 2:
+                continue
+            sig_base, sig_quote = _sym_parts
+            if not sig_base or not sig_quote:
+                continue
             if currency == sig_base:
                 implied_dir = sig.direction
             elif currency == sig_quote:
@@ -1197,7 +1219,13 @@ def decide_all(
         for i, r in enumerate(desk.rejected):
             if r.reject_code != "CLUSTER_DUP":
                 continue
-            m = re.search(r"=\s*([A-Za-z0-9]+/[A-Za-z0-9]+)", r.detail or "")
+            # R-A1 : detail d'abord (cellule Detail, correction A3), puis repli
+            # sur row_text (ligne complete) : le representant peut etre porte par
+            # une autre cellule sur certains documents Desk. Comportement d'avant
+            # la correction A3, sans reintroduire la pollution du facteur limitant.
+            m = re.search(r"=\s*([A-Za-z0-9]+/[A-Za-z0-9]+)", r.detail or "") \
+                or re.search(r"=\s*([A-Za-z0-9]+/[A-Za-z0-9]+)",
+                             getattr(r, "row_text", "") or "")
             if m and m.group(1) in rep_states:
                 rej[i] = replace(rej[i], advisories=rej[i].advisories + (
                     f"representant {m.group(1)} present dans ce rapport en etat "
