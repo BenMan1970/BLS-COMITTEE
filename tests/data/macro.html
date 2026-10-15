@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Macro Briefing BLUESTAR — 17/07/2026</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+:root{
+  --royal:#1B45B4;--royal-mid:#2355C3;--royal-light:#E8EEFF;--royal-dim:#6B89D8;
+  --bg:#eef2fb;--white:#fff;--card:#f2f5fc;--dark:#0d1f4e;--body:#1a1a2e;--sec:#3a4a7a;--muted:#6B89D8;--th:#E8EEFF;
+  --amber:#1B45B4;--amb-bg:#E8EEFF;--amb-bd:#6B89D8;--amb-tx:#0d1f4e;
+  --green:#1a7a4a;--grn-bg:#e8f5ee;--grn-bd:#6EE7B7;--grn-tx:#065F46;
+  --long:#1a7a4a;--lng-bg:#e8f5ee;--lng-bd:#6EE7B7;--lng-tx:#065F46;
+  --yellow:#1B45B4;--yel-bg:#E8EEFF;--yel-bd:#6B89D8;--yel-tx:#0d1f4e;
+  --red:#c0292a;--red-bg:#fdecea;--red-bd:#FCA5A5;--red-tx:#7F1D1D;
+  --short:#c0292a;--sht-bg:#fdecea;--sht-bd:#FCA5A5;--sht-tx:#7F1D1D;
+  --blue:#2355C3;--blu-bg:#E8EEFF;--blu-bd:#6B89D8;--purple:#1B45B4;
+  --orange:#2355C3;--org-bg:#E8EEFF;--org-bd:#6B89D8;
+  --border:#dbe2f4;--border2:#bbc6e8;--r:7px;--rl:10px;--gap:16px;
+  --shadow-xs:0 1px 2px rgba(13,31,78,.05);
+  --shadow-sm:0 1px 3px rgba(13,31,78,.06),0 1px 2px rgba(13,31,78,.04);
+  --shadow-md:0 6px 20px rgba(13,31,78,.07),0 2px 8px rgba(13,31,78,.05);
+  --inset:inset 0 1px 0 rgba(255,255,255,.7);
+  --sans:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex Mono','SF Mono','Courier New',monospace
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:linear-gradient(180deg,#eef2fb 0%,#f4f7fc 100%);background-attachment:fixed;color:var(--body);font-family:var(--sans);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;font-feature-settings:"kern","liga","calt"}
+#page{max-width:1200px;margin:0 auto;background:transparent}
+.wrap{padding:18px 24px}
+.mono,.sec-num,thead th,.kpi-val,.cb-rate,.rank-row,.rank-val,.top-row,.top-asset,.asset-name,.asset-price,.ev-time,.risk-row,.footer{font-variant-numeric:tabular-nums}
+.section{background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:var(--gap);overflow:hidden;box-shadow:var(--shadow-sm)}
+.sec-hdr{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#ffffff 0%,#fafcff 100%);box-shadow:inset 3px 0 0 var(--royal)}
+.sec-num{width:27px;height:27px;border-radius:50%;background:linear-gradient(135deg,var(--royal-mid),var(--royal));color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--mono);box-shadow:0 2px 6px rgba(27,69,180,.35),inset 0 1px 0 rgba(255,255,255,.25)}
+.sec-ttl{font-size:13px;font-weight:700;color:var(--dark);text-transform:uppercase;letter-spacing:.6px;font-family:var(--mono)}
+.sec-sub{margin-left:auto;font-size:10px;color:var(--muted);font-style:italic}
+.sec-body{padding:16px 18px}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:5px;font-size:9px;font-weight:700;border:1px solid transparent;font-family:var(--mono)}
+.badge-green{background:var(--grn-bg);border-color:var(--grn-bd);color:var(--grn-tx)}
+.badge-red{background:var(--red-bg);border-color:var(--red-bd);color:var(--red-tx)}
+.badge-yellow,.badge-blue{background:var(--royal-light);border-color:var(--royal-dim);color:var(--royal)}
+.brief{background:linear-gradient(180deg,#f5f8fd 0%,#eef2fb 100%);border:1px solid var(--border);border-radius:var(--r);padding:13px 16px;margin-bottom:10px;box-shadow:var(--shadow-xs),var(--inset)}
+.brief-grid{display:grid;grid-template-columns:130px 1fr;gap:6px 8px;font-size:12px}
+.brief-lbl{font-weight:700;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.6px;padding-top:2px;font-family:var(--mono)}
+.sub-lbl{font-size:9px;font-weight:700;color:var(--royal);text-transform:uppercase;letter-spacing:1.2px;margin:12px 0 8px;font-family:var(--mono);display:flex;align-items:center;gap:7px}
+.sub-lbl::before{content:'';width:14px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--royal),transparent);flex-shrink:0}
+.sub-lbl:first-child{margin-top:0}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px}
+thead tr{background:linear-gradient(180deg,var(--royal-mid),var(--royal))!important}
+thead th{padding:9px 12px;text-align:left;font-size:9px;font-weight:700;color:#fff;letter-spacing:1px;text-transform:uppercase;white-space:nowrap;font-family:var(--mono)}
+tbody tr{border-bottom:1px solid var(--border)}
+tbody tr:nth-child(even){background:var(--card)}
+tbody tr:last-child{border-bottom:none}
+tbody td{padding:8px 12px;vertical-align:middle}
+.abox{border-radius:var(--r);padding:11px 14px;margin-bottom:14px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow-xs)}
+.abox.long{background:var(--grn-bg);border-left:3px solid var(--green);color:var(--grn-tx)}
+.abox.short{background:var(--red-bg);border-left:3px solid var(--red);color:var(--red-tx)}
+.abox.wait{background:var(--royal-light);border-left:3px solid var(--royal);color:var(--royal)}
+.abox.avoid{background:var(--red-bg);border-left:3px solid var(--red);color:var(--red-tx)}
+.regime-bar{display:flex;align-items:center;gap:10px;background:linear-gradient(180deg,#f5f8fd,#eef2fb);border:1px solid var(--border);border-radius:var(--r);padding:11px 16px;margin-bottom:14px;flex-wrap:wrap;box-shadow:var(--shadow-xs),var(--inset)}
+.regime-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-weight:600;font-family:var(--mono)}
+.regime-val{font-size:13px;font-weight:700;color:var(--dark)}
+.regime-on{color:var(--green)}.regime-off{color:var(--red)}.regime-mix{color:var(--royal)}
+.top-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px}
+.top-card{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow-xs)}
+.top-hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)}
+.top-hdr.green{background:var(--grn-bg);border-left:3px solid var(--green)}.top-hdr.yellow{background:var(--royal-light);border-left:3px solid var(--royal)}
+.top-asset{font-size:15px;font-weight:700;font-family:var(--mono);color:var(--dark)}
+.top-body{padding:12px 14px;background:var(--white)}
+.top-biais{font-size:12px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.top-biais.long{color:var(--green)}.top-biais.short{color:var(--red)}.top-biais.wait{color:var(--royal)}
+.top-row{display:flex;justify-content:space-between;font-size:11px;font-family:var(--mono);padding:3px 0;border-bottom:1px solid var(--border);color:var(--sec)}
+.top-row:last-of-type{border-bottom:none}
+.lbl{color:var(--muted);font-size:10px;font-family:var(--mono)}
+.vg{color:var(--green);font-weight:700}.vr{color:var(--red);font-weight:700}.va{color:var(--royal);font-weight:700}
+.top-action{margin-top:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 10px;border-radius:var(--r);text-align:center;font-family:var(--mono)}
+.top-action.long{background:var(--grn-bg);color:var(--grn-tx)}.top-action.short{background:var(--red-bg);color:var(--red-tx)}.top-action.wait{background:var(--royal-light);color:var(--royal)}
+.avoid-list{display:flex;flex-direction:column;gap:6px}
+.avoid-item{display:flex;align-items:center;gap:10px;background:var(--red-bg);border:1px solid var(--red-bd);border-radius:var(--r);padding:8px 12px;font-size:12px}
+.avoid-asset{font-weight:700;font-family:var(--mono);color:var(--red);min-width:80px}.avoid-reason{color:var(--sec)}
+.event{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:10px;box-shadow:var(--shadow-xs)}
+.event-hdr{display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--card);border-bottom:1px solid var(--border)}
+.event.high .event-hdr{border-left:3px solid var(--red)}.event.medium .event-hdr{border-left:3px solid var(--royal)}
+.ev-time{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--royal);min-width:50px}
+.ev-name{font-weight:600;font-size:12px;color:var(--dark)}.ev-tag{margin-left:auto}
+.ev-prev{padding:6px 14px;background:var(--card);border-bottom:1px solid var(--border);font-size:11px;color:var(--sec)}
+.ev-scen{display:grid;grid-template-columns:1fr 1fr}
+.s-beat{background:var(--grn-bg);border-right:1px solid var(--grn-bd);padding:10px 14px}
+.s-miss{background:var(--red-bg);padding:10px 14px}
+.s-lbl-b{color:var(--grn-tx);font-weight:700;font-size:11px;margin-bottom:4px}.s-lbl-m{color:var(--red-tx);font-weight:700;font-size:11px;margin-bottom:4px}
+.s-body{font-size:11px;color:var(--sec)}.s-act{font-size:10px;color:var(--muted);margin-top:4px}
+.ev-conseil{padding:8px 14px;background:var(--royal-light);border-top:1px solid var(--royal-dim);font-size:11px;color:var(--royal);font-weight:600}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px}
+.kpi{background:linear-gradient(180deg,#fff,#f7f9fe);border:1px solid var(--border);border-radius:var(--r);padding:13px 14px;text-align:center;border-top:2px solid var(--border2);box-shadow:var(--shadow-xs)}
+.kpi.amber{border-top-color:var(--royal)}.kpi.green{border-top-color:var(--green)}.kpi.red{border-top-color:var(--red)}.kpi.blue{border-top-color:var(--royal-mid)}
+.kpi-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:4px;font-family:var(--mono)}
+.kpi-val{font-size:22px;font-weight:700;font-family:var(--mono);line-height:1}
+.kpi-val.amber,.kpi-val.blue{color:var(--royal)}.kpi-val.green{color:var(--green)}.kpi-val.red{color:var(--red)}
+.kpi-sub{font-size:10px;color:var(--muted);margin-top:4px}
+.cb-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+.cb{background:linear-gradient(180deg,#fff,#f7f9fe);border:1px solid var(--border);border-radius:var(--r);padding:13px 14px;box-shadow:var(--shadow-xs)}
+.cb-flag{font-size:14px;margin-bottom:2px}.cb-name{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:2px}
+.cb-rate{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--royal);margin-bottom:6px}
+.cb-biais{font-size:11px;color:var(--sec);margin-bottom:3px}.cb-next{font-size:10px;color:var(--muted);font-family:var(--mono)}
+.proba-wrap{margin:6px 0 4px}.proba-bar{height:6px;background:var(--border);border-radius:4px;overflow:hidden;display:flex;box-shadow:inset 0 1px 2px rgba(13,31,78,.12)}
+.pb-pause{height:100%;background:var(--royal)}.pb-cut{height:100%;background:var(--green)}.pb-hike{height:100%;background:var(--red)}
+.proba-lbls{display:flex;justify-content:space-between;font-size:9px;margin-top:3px;font-family:var(--mono)}
+.pl-p{color:var(--royal)}.pl-c{color:var(--green)}.pl-h{color:var(--red)}
+.rank-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-family:var(--mono);font-size:11px}
+.rank-lbl{min-width:60px;font-weight:700;color:var(--sec)}
+.rank-bar{flex:1;height:15px;background:var(--border);border-radius:4px;overflow:hidden;position:relative;box-shadow:inset 0 1px 2px rgba(13,31,78,.12)}
+.rank-fill{height:100%;border-radius:4px;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}
+.rank-fill.crowd,.rank-fill.weak{background:linear-gradient(90deg,var(--red),#EF4444)}
+.rank-fill.norm,.rank-fill.neutral{background:linear-gradient(90deg,var(--royal),var(--royal-mid))}
+.rank-fill.cap,.rank-fill.strong{background:linear-gradient(90deg,var(--green),#10B981)}
+.rank-val{min-width:130px;text-align:right;font-weight:700}
+.asset{border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:14px;box-shadow:var(--shadow-sm)}
+.asset-hdr{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border)}
+.asset-hdr.green{background:var(--grn-bg);border-left:3px solid var(--green)}.asset-hdr.yellow{background:var(--royal-light);border-left:3px solid var(--royal)}
+.asset-name{font-size:16px;font-weight:700;font-family:var(--mono);color:var(--dark)}.asset-price{margin-left:auto;font-size:13px;font-family:var(--mono);color:var(--muted)}
+.asset-fields{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:0}
+.field-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);padding:8px 14px 2px;font-family:var(--mono)}
+.field-val{font-size:12px;font-weight:600;padding:2px 14px 8px;border-bottom:1px solid var(--border)}
+.field-val.green{color:var(--green)}.field-val.red{color:var(--red)}.field-val.amber{color:var(--royal)}.field-val.orange{color:var(--royal-mid)}
+.asset-action{padding:11px 18px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;text-align:center;font-family:var(--mono)}
+.asset-action.long{background:var(--grn-bg);color:var(--grn-tx)}.asset-action.short{background:var(--red-bg);color:var(--red-tx)}.asset-action.wait{background:var(--royal-light);color:var(--royal)}
+.risk-main{background:var(--red-bg);border:1px solid var(--red-bd);border-left:3px solid var(--red);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--red-tx);box-shadow:var(--shadow-xs)}
+.risk-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.risk-bull{background:var(--grn-bg);border:1px solid var(--grn-bd);border-radius:var(--r);padding:12px 16px;box-shadow:var(--shadow-xs)}
+.risk-bear{background:var(--red-bg);border:1px solid var(--red-bd);border-radius:var(--r);padding:12px 16px;box-shadow:var(--shadow-xs)}
+.risk-ttl{font-family:var(--mono);font-size:10px;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+.risk-bull .risk-ttl{color:var(--green)}.risk-bear .risk-ttl{color:var(--red)}
+.risk-proba{font-size:10px;color:var(--sec);margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid rgba(0,0,0,.08)}
+.risk-row{font-family:var(--mono);font-size:11px;color:var(--sec);padding:4px 0;border-bottom:1px solid rgba(27,69,180,.06)}
+.risk-row:last-child{border-bottom:none}
+.no-setup{background:var(--card);border:2px dashed var(--border2);border-radius:var(--rl);padding:40px 20px;text-align:center}
+.no-setup-icon{font-size:36px;margin-bottom:12px}.no-setup-title{font-size:16px;font-weight:700;color:var(--dark);margin-bottom:6px}.no-setup-sub{font-size:12px;color:var(--muted)}
+.tw{overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow-xs)}
+.tw table{border-radius:var(--r);overflow:hidden}
+.mono{font-family:var(--mono)}.bold{font-weight:700}.sm{font-size:11px}
+.green{color:var(--green)}.red{color:var(--red)}.amber{color:var(--royal)}.blue{color:var(--royal-mid)}
+.stars-1::before,.stars-2::before,.stars-3::before,.stars-4::before,.stars-5::before{font-family:'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2','Noto Sans Symbols','DejaVu Sans',sans-serif;color:var(--royal);letter-spacing:1px}
+.stars-1::before{content:'★☆☆☆☆'}
+.stars-2::before{content:'★★☆☆☆'}
+.stars-3::before{content:'★★★☆☆'}
+.stars-4::before{content:'★★★★☆'}
+.stars-5::before{content:'★★★★★'}
+.footer{text-align:center;font-family:var(--mono);font-size:8px;color:var(--muted);border-top:1px solid var(--border);padding:12px 24px;margin-top:4px;letter-spacing:1.5px}
+.page-header{background:linear-gradient(135deg,#F8FAFF 0%,#EEF3FE 100%);border:1px solid var(--border);border-radius:var(--rl) var(--rl) 0 0;display:flex;align-items:center;justify-content:space-between;padding:16px 28px;margin-bottom:0;position:relative;box-shadow:var(--shadow-sm)}
+.page-header::after{content:'';position:absolute;bottom:0;left:24px;right:24px;height:2px;background:linear-gradient(90deg,var(--royal),var(--royal-dim),transparent);border-radius:2px}
+.header-left{display:flex;align-items:center;gap:16px}
+.logo-marker{width:38px;height:38px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--white);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow-xs)}
+.sys-label{font-size:9px;letter-spacing:.3em;color:var(--royal-dim);font-family:var(--mono);font-weight:600;text-transform:uppercase}
+.sys-name{font-size:22px;font-weight:700;color:var(--dark);letter-spacing:-.02em;line-height:1.1;font-family:var(--mono)}
+.sys-desc{font-size:9px;color:var(--muted);font-family:var(--mono);margin-top:2px;letter-spacing:.02em}
+.header-right{text-align:right;border-left:1px solid var(--border2);padding-left:20px}
+.briefing-label{font-size:11px;color:var(--royal);font-family:var(--mono);letter-spacing:.08em;font-weight:600;text-transform:uppercase}
+.briefing-sub{font-size:9px;color:var(--sec);font-family:var(--mono);margin-top:4px;letter-spacing:.02em}
+.page-subbar{background:rgba(27,69,180,.05);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:9px 28px;display:flex;align-items:center;gap:28px;flex-wrap:wrap;font-size:10px;font-family:var(--mono);color:var(--sec)}
+.confidential{margin-left:auto;color:var(--royal);font-weight:600;background:rgba(27,69,180,.08);padding:2px 10px;border-radius:20px;font-size:9px}
+@media print{
+  @page{margin:10mm;size:A4 portrait}
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;box-shadow:none!important}
+  body{background:#fff!important;font-size:11px}
+  .page-header{background:#F8FAFF!important;border:1px solid var(--border)!important}
+  .page-subbar{background:#f5f7fc!important}
+  thead tr{background:var(--royal)!important}
+  .tw{overflow:visible!important}
+  table{page-break-inside:auto;width:100%!important}
+  tr{page-break-inside:avoid}
+  .section{margin-bottom:10px;page-break-inside:auto!important;break-inside:auto!important}
+  .asset,.event,.kpi,.cb,.risk-bull,.risk-bear,.top-card,.brief,.rank-row,.top-row,.risk-row{break-inside:avoid}
+  .wrap{padding:8px 12px;border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+  #page{background:#fff}
+  .footer{border-top:1px solid var(--border);padding:6px 12px;break-inside:avoid}
+  #pdf-fab{display:none!important}
+  /* AUDIT-FIX (17/07/2026): print-density tightening. Measured objectively
+     (trailing-whitespace analysis on rendered PDF pages) that pages 3/5/6
+     carried 12-20% blank space at the bottom because a full card/section
+     didn't fit the remaining room and break-inside:avoid pushed it whole to
+     the next page. Root cause: screen-optimised padding (built for mouse/
+     touch comfort) left on cards in print, where density matters more than
+     touch targets. Reclaiming vertical space here lets more content fit per
+     page before a push is triggered — additive only, scoped to @media
+     print, does not touch screen rendering or any non-padding/margin
+     property (colors, borders, layout, font-sizes all unchanged).
+  */
+  .section{margin-bottom:6px}
+  .kpi-grid,.cb-grid{gap:8px;margin-bottom:8px}
+  .kpi-grid{grid-template-columns:repeat(7,1fr);break-inside:avoid}
+  .kpi-val{font-size:17px}
+  .kpi,.cb{padding:8px 10px}
+  .asset{margin-bottom:8px}
+  .asset-hdr{padding:7px 14px}
+  .field-lbl{padding:5px 14px 1px}
+  .field-val{padding:1px 14px 5px}
+  .asset-action{padding:7px 14px}
+  .brief{padding:9px 14px;margin-bottom:6px}
+  .risk-bull,.risk-bear,.risk-main{padding:8px 12px;margin-bottom:8px}
+}
+#pdf-fab{position:fixed;bottom:28px;right:28px;z-index:9999;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+#pdf-fab button{background:#1B45B4;color:#fff;border:none;padding:11px 20px;border-radius:8px;font-family:'IBM Plex Mono','Courier New',monospace;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.06em;box-shadow:0 4px 16px rgba(27,69,180,.45);display:flex;align-items:center;gap:8px;transition:background .15s}
+#pdf-fab button:hover{background:#2355C3}
+#pdf-fab small{font-size:9px;color:rgba(255,255,255,.7);font-family:monospace;text-align:right}
+
+</style>
+</head>
+
+<body>
+
+<!-- ═══ BOUTON TÉLÉCHARGEMENT PDF (masqué à l'impression) ═══ -->
+<div id="pdf-fab">
+  <button onclick="window.print()">📥 Télécharger PDF</button>
+  <small>Chrome → Enregistrer en PDF<br>Activer "Graphiques d'arrière-plan"</small>
+</div>
+
+<!-- ═══ HEADER — Design BLUESTAR (inchangé) ═══ -->
+<div id="page">
+<div class="page-header">
+  <div class="header-left">
+    <div class="logo-marker">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 17.27L18.18 21L16.54 13.97L22 9.24L14.81 8.63L12 2L9.19 8.63L2 9.24L7.46 13.97L5.82 21L12 17.27Z" fill="#1B45B4"/>
+        </svg>
+    </div>
+    <div>
+      <div class="sys-label">BLUESTAR SYSTEM</div>
+      <div class="sys-name">BLUESTAR</div>
+      <div class="sys-desc">FX INSTITUTIONAL DESK · v10</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="briefing-label">INSTITUTIONAL MACRO BRIEFING</div>
+    <div class="briefing-sub">Analyse Macro Quantitative</div>
+  </div>
+</div>
+<div class="page-subbar">
+  <span>📅 Vendredi 17/07/2026</span>
+  <span>🕐 20:57 CET — Session New York</span>
+  <span class="confidential">● CONFIDENTIEL</span>
+</div>
+
+
+<div class="wrap">
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">1</div><div class="sec-ttl">Tableau de Bord Exécutif</div><div class="sec-sub">Où agir aujourd'hui — lecture en 30 sec</div></div>
+  <div class="sec-body">
+    <div class="regime-bar">
+      <span class="regime-lbl">Régime du jour</span>
+      <span class="regime-val regime-mix">Mixed / Selective</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)">VIX : <span class="mono bold amber">18,66</span> · MOVE : <span class="mono bold blue">66,8</span> · Depuis événements macro récents</span>
+    </div>
+    
+    <div class="sub-lbl">🎯 ACTIFS PRIORITAIRES DU JOUR</div>
+    <div class="top-grid">
+      <div class="top-card">
+        <div class="top-hdr green">
+          <span class="top-asset">GBP/USD</span>
+          <span style="font-size:13px;color:var(--amber)"><span class="stars-4"></span></span>
+        </div>
+        <div class="top-body">
+          <div class="top-biais short">↓ 🟢/🟡 SHORT — momentum prix D1</div>
+          <div class="top-row"><span class="lbl">Achat macro</span><span class="vg">1,3359</span></div>
+          <div class="top-row"><span class="lbl">Vente macro</span><span class="vr">1,3549</span></div>
+          <div class="top-row"><span class="lbl">Stop macro</span><span class="vr">1,3625</span></div>
+          <div class="top-row"><span class="lbl">Expected Move</span><span class="va">±95 pips</span></div>
+          <div class="top-row"><span class="lbl">IPS / COT</span><span class="va">GBP 3 — Crowded short / Capitul. · USD : IPS [N/A] — pas de contrat CFTC autonome (contrepartie implicite des 7 majors ; positionnement non mesuré ici, cf. USD Index ICE non intégré).</span></div>
+          <div class="top-action short">CHERCHER SHORT</div>
+        </div>
+      </div>
+      <div class="top-card">
+        <div class="top-hdr green">
+          <span class="top-asset">USD/CHF</span>
+          <span style="font-size:13px;color:var(--amber)"><span class="stars-4"></span></span>
+        </div>
+        <div class="top-body">
+          <div class="top-biais long">↑ 🟢/🟡 LONG — momentum prix D1</div>
+          <div class="top-row"><span class="lbl">Achat macro</span><span class="vg">0,8016</span></div>
+          <div class="top-row"><span class="lbl">Vente macro</span><span class="vr">0,8132</span></div>
+          <div class="top-row"><span class="lbl">Stop macro</span><span class="vr">0,7970</span></div>
+          <div class="top-row"><span class="lbl">Expected Move</span><span class="va">±58 pips</span></div>
+          <div class="top-row"><span class="lbl">IPS / COT</span><span class="va">CHF 28 — Normal · USD : IPS [N/A] — pas de contrat CFTC autonome (contrepartie implicite des 7 majors ; positionnement non mesuré ici, cf. USD Index ICE non intégré).</span></div>
+          <div class="top-action long">CHERCHER LONG</div>
+        </div>
+      </div>
+      <div class="top-card">
+        <div class="top-hdr green">
+          <span class="top-asset">GBP/JPY</span>
+          <span style="font-size:13px;color:var(--amber)"><span class="stars-2"></span></span>
+        </div>
+        <div class="top-body">
+          <div class="top-biais short">↓ 🟢/🟡 SHORT — momentum prix D1</div>
+          <div class="top-row"><span class="lbl">Achat macro</span><span class="vg">217,08</span></div>
+          <div class="top-row"><span class="lbl">Vente macro</span><span class="vr">219,94</span></div>
+          <div class="top-row"><span class="lbl">Stop macro</span><span class="vr">221,09</span></div>
+          <div class="top-row"><span class="lbl">Expected Move</span><span class="va">±143 pips</span></div>
+          <div class="top-row"><span class="lbl">IPS / COT</span><span class="va">GBP 3 (Crowded short / Capitul.) · JPY 16 (Crowded short / Capitul.) — DEUX jambes extrêmes</span></div>
+          <div class="top-action short">CHERCHER SHORT</div>
+        </div>
+      </div></div>
+    <div class="sub-lbl">🚫 ÉVITER AUJOURD'HUI</div>
+    <div class="avoid-list"><div class="avoid-item"><span class="avoid-asset">—</span><span class="avoid-reason">Aucun actif explicitement à éviter aujourd'hui.</span></div></div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">2</div><div class="sec-ttl">Catalyseurs du Jour</div><div class="sec-sub">News qui peuvent invalider un setup</div></div>
+  <div class="sec-body"><div class="abox wait" style="font-size:12px"><span>Aucun catalyseur high-impact à venir dans la fenêtre du calendrier [Forex Factory].</span></div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">3</div><div class="sec-ttl">Contexte Macro & Banques Centrales</div><div class="sec-sub">Le vent de fond — différentiel de taux</div></div>
+  <div class="sec-body">
+    <div class="kpi-grid"><div class="kpi amber"><div class="kpi-lbl">VIX</div><div class="kpi-val amber">18,66</div><div class="kpi-sub">↑ 11,5%</div></div><div class="kpi blue"><div class="kpi-lbl">MOVE Index</div><div class="kpi-val blue">66,8</div><div class="kpi-sub">calme</div></div><div class="kpi green"><div class="kpi-lbl">DXY</div><div class="kpi-val green">100,77</div><div class="kpi-sub">→ 0,0%</div></div><div class="kpi amber"><div class="kpi-lbl">US10Y</div><div class="kpi-val amber">4,54%</div><div class="kpi-sub">↓ 0,7%</div></div><div class="kpi amber"><div class="kpi-lbl">Or XAU</div><div class="kpi-val amber">4 013</div><div class="kpi-sub">↑ 0,7%</div></div><div class="kpi blue"><div class="kpi-lbl">GDP Nowcast</div><div class="kpi-val blue">1,7 %</div><div class="kpi-sub">FRED · GDPNOW · T2 2026 (publié 17/07) · +0,5 pt vs préc.</div></div><div class="kpi amber"><div class="kpi-lbl">Surprise Idx</div><div class="kpi-val amber">-62</div><div class="kpi-sub">↓ US Macro Momentum · n=2</div></div></div>
+    <div class="sub-lbl">🏦 BANQUES CENTRALES</div>
+    <div class="cb-grid">
+      <div class="cb">
+        <div class="cb-flag">🇺🇸</div><div class="cb-name">FED</div><div class="cb-rate">3,75% <span style="font-size:9px;font-weight:400;color:var(--muted)">[FRED]</span></div>
+        
+        <div class="proba-wrap">
+          <div class="proba-bar"><div class="pb-pause" style="width:70%"></div><div class="pb-cut" style="width:0%"></div><div class="pb-hike" style="width:30%"></div></div>
+          <div class="proba-lbls"><span class="pl-p">Pause 70%</span><span class="pl-c">Baisse 0%</span><span class="pl-h">Hausse 30%</span></div>
+          <div style="font-size:9px;color:var(--muted);font-family:var(--mono);margin-top:2px">Probas : saisie manuelle [PROXY · overrides]</div>
+        </div>
+        <div class="cb-next">Prochaine : 29/07/2026</div>
+        <div class="cb-biais"><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">FAIT ·</span> Maintenu 3,50–3,75% le 17/06 (12-0). Dot-plot : 9/18 voient ≥1 hausse d&#x27;ici fin 2026.<br><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">BIAIS ·</span> Hawkish — biais de resserrement, hausse possible en septembre (~65% FedWatch).</div>
+      </div>
+      <div class="cb"><div class="cb-flag">🇪🇺</div><div class="cb-name">BCE</div><div class="cb-rate">2,25% <span style="font-size:9px;font-weight:400;color:var(--muted)">[FRED]</span></div><div class="cb-biais"><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">FAIT ·</span> Dépôt 2,25% (+25bp le 17/06). MRO 2,40%.<br><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">BIAIS ·</span> Hawkish — lutte contre l&#x27;inflation énergétique ; croissance révisée en baisse.</div><div class="cb-next">Prochaine : fin juillet [PROXY]</div></div>
+      <div class="cb"><div class="cb-flag">🇯🇵</div><div class="cb-name">BoJ</div><div class="cb-rate">0,84% <span style="font-size:9px;font-weight:400;color:var(--muted)">[FRED]</span></div><div class="cb-biais"><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">FAIT ·</span> Call o/n ~1,0% (relevé le 17/06, 7-1).<br><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">BIAIS ·</span> Hawkish — poursuite de la normalisation vers 2% ; risque d&#x27;intervention MoF &gt;161.</div><div class="cb-next">Prochaine : 30–31/07/2026</div></div>
+      <div class="cb"><div class="cb-flag">🇬🇧</div><div class="cb-name">BoE</div><div class="cb-rate">3,75% <span style="font-size:9px;font-weight:400;color:var(--muted)">[PROXY · manual override]</span></div><div class="cb-biais"><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">FAIT ·</span> Maintenu 3,75% en juin (7-2, 2 voulaient +25bp).<br><span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);letter-spacing:.5px">BIAIS ·</span> Neutre à légèrement hawkish.</div><div class="cb-next">Prochaine : 30/07/2026</div></div>
+    </div>
+    <div class="abox wait" style="font-size:12px">
+      <span><span class="bold">📊 DIFFÉRENTIEL DOMINANT :</span> USD (3,75%) vs JPY (0,84%) → écart ≈ 2,91 pt [FRED · PRIMARY] — Portage structurellement favorable à USD face à JPY tant que cet écart de taux directeurs persiste.</span>
+    </div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">M</div><div class="sec-ttl">Macro Overlay</div><div class="sec-sub">Contexte institutionnel — colore le jugement, ne filtre pas les setups</div></div>
+  <div class="sec-body">
+    <div class="brief">
+      <div class="brief-grid">
+        <span class="brief-lbl">Macro Theme</span>
+        <span>Semaine sans catalyseur macro daté majeur — lecture pilotée par le régime de volatilité et le positionnement plutôt que par le calendrier. Régime : Mixed / Selective. <span style="font-size:10px;color:var(--muted)">[N/A] — aucun événement CRITICAL/HIGH programmé</span></span>
+        <span class="brief-lbl">COT &amp; Positioning</span>
+        <span>5 devises en positionnement extrême (EUR/GBP/JPY/CAD/NZD crowded short/capitulation). <span class="badge badge-red" style="margin-left:6px">⚠️ SQUEEZE RISK GBP</span><span style="font-size:10px;color:var(--muted)"> [OBSERVÉ — CFTC Non-Commercials | Vendredi 10 juillet 2026]</span></span>
+        <span class="brief-lbl">DXY Context</span>
+        <span>DXY 100,77 (→ 0,0%) — impacte EUR/USD, USD/JPY, USD/CAD. <span style="font-size:10px;color:var(--muted)">[yfinance | 20:53 CET | 17/07]</span></span>
+        <span class="brief-lbl">Volatility</span>
+        <span>VIX 18,66 · MOVE 66,8 → <span style="font-style:italic">Méthode : niveau absolu + position vs seuils (15 / 22). Vol modérée à élevée → réduire la taille, élargir les stops.</span></span>
+        <span class="brief-lbl">Correlation</span>
+        <span class="mono" style="font-size:11px">EUR/USD ≈ −0,44 DXY · USD/JPY n/s (US10Y) <span style="font-size:10px;color:var(--muted)">[PROXY · échantillon court]</span></span>
+        <span class="brief-lbl">Liquidity &amp; Flow</span>
+        <span>Spread SOFR−EFFR -1,0 bp → pas de stress de financement USD [FRED · SOFR/EFFR]. Surveiller les flux de fin de journée et les rebalancings de fonds monétaires.</span>
+      </div>
+    </div>
+    <div class="sub-lbl">💪 CURRENCY STRENGTH RANKING — 8 devises majeures</div>
+    <div style="font-family:var(--mono);font-size:11px">
+      <div class="rank-row"><span class="rank-lbl">1. USD</span><div class="rank-bar"><div class="rank-fill strong" style="width:80%"></div></div><span class="rank-val strong">80</span></div><div class="rank-row"><span class="rank-lbl">2. CAD</span><div class="rank-bar"><div class="rank-fill strong" style="width:77%"></div></div><span class="rank-val strong">77</span></div><div class="rank-row"><span class="rank-lbl">3. JPY</span><div class="rank-bar"><div class="rank-fill strong" style="width:60%"></div></div><span class="rank-val strong">60</span></div><div class="rank-row"><span class="rank-lbl">4. NZD</span><div class="rank-bar"><div class="rank-fill neutral" style="width:58%"></div></div><span class="rank-val neutral">58</span></div><div class="rank-row"><span class="rank-lbl">5. AUD</span><div class="rank-bar"><div class="rank-fill neutral" style="width:57%"></div></div><span class="rank-val neutral">57</span></div><div class="rank-row"><span class="rank-lbl">6. EUR</span><div class="rank-bar"><div class="rank-fill neutral" style="width:48%"></div></div><span class="rank-val neutral">48</span></div><div class="rank-row"><span class="rank-lbl">7. CHF</span><div class="rank-bar"><div class="rank-fill weak" style="width:12%"></div></div><span class="rank-val weak">12</span></div><div class="rank-row"><span class="rank-lbl">8. GBP</span><div class="rank-bar"><div class="rank-fill weak" style="width:8%"></div></div><span class="rank-val weak">8</span></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Score relatif · 0–100 <span class="amber">[Oanda v20 · D1]</span></div>
+    </div>
+    <div class="sub-lbl">📊 INSTITUTIONAL POSITIONING SCORE (IPS 0–100) — Non-Commercials CFTC</div>
+    <div style="font-family:var(--mono);font-size:11px">
+      <div class="rank-row"><span class="rank-lbl">EUR</span><div class="rank-bar"><div class="rank-fill crowd" style="width:12%"></div></div><span class="rank-val weak">12 Crowded short / Capitul. (Δ1s -17326, ↓)</span></div><div class="rank-row"><span class="rank-lbl">GBP</span><div class="rank-bar"><div class="rank-fill crowd" style="width:3%"></div></div><span class="rank-val weak">3 Crowded short / Capitul. (Δ1s +14244, ↑)</span></div><div class="rank-row"><span class="rank-lbl">JPY</span><div class="rank-bar"><div class="rank-fill crowd" style="width:16%"></div></div><span class="rank-val weak">16 Crowded short / Capitul. (Δ1s +31314, ↑)</span></div><div class="rank-row"><span class="rank-lbl">CHF</span><div class="rank-bar"><div class="rank-fill norm" style="width:28%"></div></div><span class="rank-val neutral">28 Normal (Δ1s +1544, ↑)</span></div><div class="rank-row"><span class="rank-lbl">AUD</span><div class="rank-bar"><div class="rank-fill norm" style="width:69%"></div></div><span class="rank-val neutral">69 Normal (Δ1s -6951, ↓)</span></div><div class="rank-row"><span class="rank-lbl">CAD</span><div class="rank-bar"><div class="rank-fill crowd" style="width:8%"></div></div><span class="rank-val weak">8 Crowded short / Capitul. (Δ1s -22320, ↓)</span></div><div class="rank-row"><span class="rank-lbl">NZD</span><div class="rank-bar"><div class="rank-fill crowd" style="width:1%"></div></div><span class="rank-val weak">1 Crowded short / Capitul. (Δ1s -1909, ↓)</span></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Lecture : &gt;80 = Crowded · 20–80 = Normal · &lt;20 = Capitulation. <span class="amber">[OBSERVÉ — CFTC Non-Commercials | Vendredi 10 juillet 2026]</span></div>
+    </div>
+    <div class="abox wait" style="font-size:12px;margin-top:12px"><span>⚠️ <span class="bold">POSITIONING ALERT :</span> GBP en zone extrême (IPS 3) — risque de squeeze si catalyseur déçoit.</span></div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">4</div><div class="sec-ttl">Fiches Actifs — Plan pour TradingView</div><div class="sec-sub">Uniquement actifs 🟢 et 🟡</div></div>
+  <div class="sec-body">
+    <div class="asset">
+      <div class="asset-hdr green">
+        <span class="asset-name">GBP/USD</span>
+        <span style="font-size:13px;color:var(--amber)"><span class="stars-4"></span></span>
+        <span class="asset-price">1,3454</span>
+      </div>
+      <div class="asset-fields">
+        <div><div class="field-lbl">1. Biais momentum (prix D1)</div><div class="field-val short">🟢/🟡 SHORT — Différentiel de momentum prix D1 [Oanda D1] favorable</div></div>
+        <div><div class="field-lbl">2. Zone d'achat macro</div><div class="field-val green">1,3359 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · support implicite]</span></div></div>
+        <div><div class="field-lbl">3. Zone de vente macro</div><div class="field-val red">1,3549 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · résistance implicite]</span></div></div>
+        <div><div class="field-lbl">4. Stop macro</div><div class="field-val red">1,3625 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · stop dynamique]</span></div></div>
+        <div><div class="field-lbl">5. Expected Move</div><div class="field-val amber">±95 pips [ATR 14j]</div></div>
+        <div><div class="field-lbl">6. Session idéale</div><div class="field-val">Londres / New York — liquidité maximale</div></div>
+        <div style="grid-column:1/-1"><div class="field-lbl">7. Risque d'invalidation</div><div class="field-val orange">Retournement macro / catalyseur (aucun catalyseur proche) → <span style="font-weight:700">invalide si clôture au-dessus du stop 1,3625</span></div></div>
+        <div><div class="field-lbl">8. Lien Positioning ↔ Setup</div><div class="field-val orange">GBP en zone extrême (IPS 3 · Crowded short / Capitul.). [OBSERVÉ — CFTC Non-Commercials | Vendredi 10 juillet 2026]. Le COT ne déclenche pas le trade ; il signale un risque de squeeze inverse si le catalyseur déçoit → conviction ±, stop strict. · USD : IPS [N/A] — pas de contrat CFTC autonome (contrepartie implicite des 7 majors ; positionnement non mesuré ici, cf. USD Index ICE non intégré).</div></div>
+        <div><div class="field-lbl">9. Corrélation clé</div><div class="field-val orange">≈ −0,14 DXY — non significative (|r|&lt;0.2) [Pearson · 20 séances]</div></div>
+      </div>
+      <div class="asset-action short">↓ CHERCHER SHORT</div>
+    </div>
+    <div class="asset">
+      <div class="asset-hdr green">
+        <span class="asset-name">USD/CHF</span>
+        <span style="font-size:13px;color:var(--amber)"><span class="stars-4"></span></span>
+        <span class="asset-price">0,8074</span>
+      </div>
+      <div class="asset-fields">
+        <div><div class="field-lbl">1. Biais momentum (prix D1)</div><div class="field-val long">🟢/🟡 LONG — Différentiel de momentum prix D1 [Oanda D1] favorable</div></div>
+        <div><div class="field-lbl">2. Zone d'achat macro</div><div class="field-val green">0,8016 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · support implicite]</span></div></div>
+        <div><div class="field-lbl">3. Zone de vente macro</div><div class="field-val red">0,8132 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · résistance implicite]</span></div></div>
+        <div><div class="field-lbl">4. Stop macro</div><div class="field-val red">0,7970 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · stop dynamique]</span></div></div>
+        <div><div class="field-lbl">5. Expected Move</div><div class="field-val amber">±58 pips [ATR 14j]</div></div>
+        <div><div class="field-lbl">6. Session idéale</div><div class="field-val">Londres / New York — liquidité maximale</div></div>
+        <div style="grid-column:1/-1"><div class="field-lbl">7. Risque d'invalidation</div><div class="field-val orange">Retournement macro / catalyseur (aucun catalyseur proche) → <span style="font-weight:700">invalide si clôture sous le stop 0,7970</span></div></div>
+        <div><div class="field-lbl">8. Lien Positioning ↔ Setup</div><div class="field-val orange">CHF IPS 28 — Normal. [OBSERVÉ — CFTC Non-Commercials | Vendredi 10 juillet 2026]. Positionnement non extrême, n&#x27;amende pas la conviction. · USD : IPS [N/A] — pas de contrat CFTC autonome (contrepartie implicite des 7 majors ; positionnement non mesuré ici, cf. USD Index ICE non intégré).</div></div>
+        <div><div class="field-lbl">9. Corrélation clé</div><div class="field-val orange">≈ +0,45 DXY [Pearson · 20 séances]</div></div>
+      </div>
+      <div class="asset-action long">↑ CHERCHER LONG</div>
+    </div>
+    <div class="asset">
+      <div class="asset-hdr green">
+        <span class="asset-name">GBP/JPY</span>
+        <span style="font-size:13px;color:var(--amber)"><span class="stars-2"></span></span>
+        <span class="asset-price">218,51</span>
+      </div>
+      <div class="asset-fields">
+        <div><div class="field-lbl">1. Biais momentum (prix D1)</div><div class="field-val short">🟢/🟡 SHORT — Différentiel de momentum prix D1 [Oanda D1] favorable</div></div>
+        <div><div class="field-lbl">2. Zone d'achat macro</div><div class="field-val green">217,08 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · support implicite]</span></div></div>
+        <div><div class="field-lbl">3. Zone de vente macro</div><div class="field-val red">219,94 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · résistance implicite]</span></div></div>
+        <div><div class="field-lbl">4. Stop macro</div><div class="field-val red">221,09 <span style="font-size:9px;color:var(--muted);font-weight:400">[ATR 14j · stop dynamique]</span></div></div>
+        <div><div class="field-lbl">5. Expected Move</div><div class="field-val amber">±143 pips [ATR 14j]</div></div>
+        <div><div class="field-lbl">6. Session idéale</div><div class="field-val">Londres / New York — liquidité maximale</div></div>
+        <div style="grid-column:1/-1"><div class="field-lbl">7. Risque d'invalidation</div><div class="field-val orange">Retournement macro / catalyseur (aucun catalyseur proche) → <span style="font-weight:700">invalide si clôture au-dessus du stop 221,09</span></div></div>
+        <div><div class="field-lbl">8. Lien Positioning ↔ Setup</div><div class="field-val orange">GBP ET JPY en zone extrême simultanément (IPS 3 / 16). [OBSERVÉ — CFTC Non-Commercials | Vendredi 10 juillet 2026]. Les deux devises de la paire sont crowded — le squeeze peut se déclencher dans les deux sens ; conviction plafonnée, stop strict.</div></div>
+        <div><div class="field-lbl">9. Corrélation clé</div><div class="field-val orange">≈ +0,27 US10Y [Pearson · 20 séances]</div></div>
+      </div>
+      <div class="asset-action short">↓ CHERCHER SHORT</div>
+    </div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">5</div><div class="sec-ttl">Risques & Scénarios d'Invalidation</div><div class="sec-sub">Ce qui peut tout changer aujourd'hui</div></div>
+  <div class="sec-body">
+    <div class="risk-main">
+      <strong>⚠️ RISQUE PRINCIPAL</strong>
+      Repricing brutal piloté par le régime de volatilité (pas de catalyseur daté dans la fenêtre). → Si réalisé : <span class="mono bold">GBP/USD</span> vers <span class="mono bold">clôture au-dessus du stop 1,3625</span>
+      <span style="font-size:10px;display:block;margin-top:4px">Probabilité estimée : qualitative — équilibré [BLUESTAR · régime de marché]</span>
+    </div>
+    <div class="risk-grid">
+      <div class="risk-bull">
+        <div class="risk-ttl">📈 Scénario BULL (risk-on) — favori si données molles</div>
+        <div class="risk-proba">Déclencheur ancré : Compression de la volatilité / détente des taux → rotation risk-on [BLUESTAR · régime de marché]</div>
+        <div class="risk-row">GBP/USD → mouvement aligné risk-on</div><div class="risk-row">USD/CHF → mouvement aligné risk-on</div><div class="risk-row">GBP/JPY → mouvement aligné risk-on</div>
+      </div>
+      <div class="risk-bear">
+        <div class="risk-ttl">📉 Scénario BEAR (risk-off) — favori si données chaudes / choc</div>
+        <div class="risk-proba">Déclencheur ancré : Choc de volatilité / repricing hawkish → fuite vers la qualité [BLUESTAR · régime de marché]</div>
+        <div class="risk-row" style="color:var(--green);font-weight:700">Refuges : Or · JPY · CHF</div><div class="risk-row">GBP/USD → mouvement aligné risk-off</div><div class="risk-row">USD/CHF → mouvement aligné risk-off</div><div class="risk-row">GBP/JPY → mouvement aligné risk-off</div>
+      </div>
+    </div>
+    <div class="abox wait" style="font-size:11px;margin-bottom:14px">
+      <span>🔄 <span class="bold">INVALIDATION DU SCÉNARIO PRINCIPAL :</span> Rupture du régime de volatilité actuel (VIX/MOVE hors fourchette) → révision du scénario dominant.</span>
+    </div>
+    <div class="sub-lbl">📊 RÉCAPITULATIF FINAL — VUE DESK</div>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Actif</th><th>Signal</th><th>Biais</th><th>Conviction</th><th>Achat</th><th>Vente</th><th>Stop</th><th>EM</th><th>Squeeze</th><th>R:R</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="mono bold">GBP/USD</td>
+            <td>🟢</td>
+            <td><span class="badge badge-red">🟢/🟡 SHORT</span></td>
+            <td><span class="stars-4"></span></td>
+            <td class="mono green sm">1,3359</td>
+            <td class="mono red sm">1,3549</td>
+            <td class="mono red sm">1,3625</td>
+            <td class="mono amber sm">±95 pips</td>
+            <td class="mono red sm">Élevé (GBP IPS extrême)</td>
+            <td class="mono blue sm">1:2,5</td>
+            <td class="sm bold">CHERCHER SHORT</td>
+          </tr>
+          <tr>
+            <td class="mono bold">USD/CHF</td>
+            <td>🟢</td>
+            <td><span class="badge badge-green">🟢/🟡 LONG</span></td>
+            <td><span class="stars-4"></span></td>
+            <td class="mono green sm">0,8016</td>
+            <td class="mono red sm">0,8132</td>
+            <td class="mono red sm">0,7970</td>
+            <td class="mono amber sm">±58 pips</td>
+            <td class="mono green sm">Faible</td>
+            <td class="mono blue sm">1:2,5</td>
+            <td class="sm bold">CHERCHER LONG</td>
+          </tr>
+          <tr>
+            <td class="mono bold">GBP/JPY</td>
+            <td>🟢</td>
+            <td><span class="badge badge-red">🟢/🟡 SHORT</span></td>
+            <td><span class="stars-2"></span></td>
+            <td class="mono green sm">217,08</td>
+            <td class="mono red sm">219,94</td>
+            <td class="mono red sm">221,09</td>
+            <td class="mono amber sm">±143 pips</td>
+            <td class="mono red sm">Élevé (2 jambes extrêmes : GBP/JPY)</td>
+            <td class="mono blue sm">1:2,5</td>
+            <td class="sm bold">CHERCHER SHORT</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:10px;font-family:var(--mono)">
+      R:R = ratio reward/risk (reward = distance entrée→objectif, risk = distance entrée→stop). Squeeze Risk = Élevé si IPS&gt;80 ou &lt;20 sur une devise du setup, sinon Modéré/Faible. ATR = Wilder EMA-14 (réconciliable avec MT4/TradingView). Figures COT Non-Commercials : OBSERVÉ — CFTC Non-Commercials | Vendredi 10 juillet 2026.
+    </div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">6</div><div class="sec-ttl">Moteur de Régime</div><div class="sec-sub">Identification multi-facteur du régime de marché</div></div>
+  <div class="sec-body">
+    <div class="regime-bar">
+      <span class="regime-lbl">Régime identifié</span>
+      <span class="regime-val">Mixed / Selective</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)">Confiance : <span class="mono bold red">11%</span></span>
+    </div>
+    <div class="abox wait" style="font-size:12px;margin-bottom:12px">
+      <span>Signaux contradictoires — ni risk-on clair ni risk-off franc. Sélectivité requise, conviction réduite.</span>
+    </div>
+    <div class="brief">
+      <div class="brief-grid" style="grid-template-columns:130px 1fr;gap:6px 8px">
+        <div class="brief-lbl">Narratif</div><div style="font-size:11px">Croissance : 1.7% (Croissance neutre — pas de signal directionnel matériel.) → Taux/Inflation : US10Y 4.54% — Taux longs élevés — pression inflationniste ou croissance forte. → Banques centrales : FED, BCE, BoJ, BoE actives dans l&#x27;analyse. → Volatilité : VIX 18.7 · MOVE 66.8 — régime Mixed / Selective. → Devises : USD le plus fort (80) · GBP le plus faible (8). → Conclusion : le régime « Mixed / Selective » est soutenu par 7 indicateur(s) et fragilisé par 0. → Note : « Reflation » était en tête du vote mais avec une confiance de 11% (&lt; seuil 20%) — régime reclassé en Mixed / Selective plutôt que publié comme signal ferme.</div>
+      </div>
+    </div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">✅ INDICATEURS DE SOUTIEN</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="rank-row"><span class="rank-lbl">✅ VIX</span><span style="font-size:11px;color:var(--green)">18.7 — Volatilité modérée — régime transitionnel.</span></div><div class="rank-row"><span class="rank-lbl">✅ MOVE</span><span style="font-size:11px;color:var(--green)">66.8 — Volatilité taux comprimée — pas de stress rates. [PROXY — poids réduit dans le vote de régime]</span></div><div class="rank-row"><span class="rank-lbl">✅ US10Y</span><span style="font-size:11px;color:var(--green)">4.54% — Taux longs élevés — pression inflationniste ou croissance forte.</span></div><div class="rank-row"><span class="rank-lbl">✅ DXY</span><span style="font-size:11px;color:var(--green)">100.8 — Dollar dans sa fourchette neutre.</span></div><div class="rank-row"><span class="rank-lbl">✅ Rate Differential</span><span style="font-size:11px;color:var(--green)">2.9pt — Écart de taux directeurs marqué — opportunités de carry trade.</span></div><div class="rank-row"><span class="rank-lbl">✅ COT Positioning</span><span style="font-size:11px;color:var(--green)">5 extreme(s) — Positionnement extrême détecté — risque de squeeze, prudence.</span></div><div class="rank-row"><span class="rank-lbl">✅ GDPNow</span><span style="font-size:11px;color:var(--green)">1.7% — Croissance neutre — pas de signal directionnel matériel.</span></div>
+      </div>
+    </div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">❌ INDICATEURS DE CONTRADICTION</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="rank-row"><span class="rank-lbl">—</span><span>Aucun indicateur contradictoire.</span></div>
+      </div>
+    </div>
+    <div class="brief" style="margin-bottom:0">
+      <div class="sub-lbl" style="margin-top:0">🔄 DÉCLENCHEURS DE TRANSITION</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="risk-row">→ MOVE au-dessus de 120 → stress rates, dégradation du régime.</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">7</div><div class="sec-ttl">Moteur d'Interprétation</div><div class="sec-sub">Pourquoi ce régime, quels facteurs dominent, quels risques</div></div>
+  <div class="sec-body">
+    <div class="abox" style="font-size:12px;margin-bottom:12px"><span class="bold">ANALYSE USD :</span> Le USD est actuellement soutenu par 4 facteur(s) : Taux Fed élevés (3.75%) — soutien au USD via le carry. · US10Y élevé (4.54%) — attractivité des rendements USD. · DXY à 100.8 — dollar dans sa fourchette neutre. · USD classé fort (score 80/100) dans le ranking multi-devises.</div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">🔑 FACTEURS DOMINANTS</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="risk-row">Aucun facteur dominant identifié.</div>
+      </div>
+    </div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">✅ INDICATEURS QUI SE RENFORCENT</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="risk-row">✅ VIX = 18.7 : Volatilité modérée — régime transitionnel.</div><div class="risk-row">✅ MOVE = 66.8 : Volatilité taux comprimée — pas de stress rates. [PROXY — poids réduit dans le vote de régime]</div><div class="risk-row">✅ US10Y = 4.54% : Taux longs élevés — pression inflationniste ou croissance forte.</div><div class="risk-row">✅ DXY = 100.8 : Dollar dans sa fourchette neutre.</div><div class="risk-row">✅ Rate Differential = 2.9pt : Écart de taux directeurs marqué — opportunités de carry trade.</div><div class="risk-row">✅ COT Positioning = 5 extreme(s) : Positionnement extrême détecté — risque de squeeze, prudence.</div><div class="risk-row">✅ GDPNow = 1.7% : Croissance neutre — pas de signal directionnel matériel.</div>
+      </div>
+    </div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">❌ INDICATEURS QUI SE CONTREDISENT</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="risk-row">❌ VIX et MOVE divergent : tension sur un marché, calme sur l&#x27;autre.</div>
+      </div>
+    </div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">🔗 CHAÎNE DE TRANSMISSION MACRO</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="rank-row"><span class="rank-lbl">Croissance</span><span style="font-size:11px">↔ Inflation: GDPNow 1.7% — croissance neutre, inflation stable</span></div><div class="rank-row"><span class="rank-lbl">Inflation</span><span style="font-size:11px">→ Banques Centrales: US10Y 4.54% — taux longs élevés poussent les BC au resserrement</span></div><div class="rank-row"><span class="rank-lbl">Banques Centrales</span><span style="font-size:11px">→ Taux: Fed hawkish — soutien aux taux courts et au USD</span></div><div class="rank-row"><span class="rank-lbl">Taux</span><span style="font-size:11px">→ Liquidité: Politique monétaire restrictive — impact sur la liquidité disponible</span></div><div class="rank-row"><span class="rank-lbl">Liquidité</span><span style="font-size:11px">↔ Volatilité: VIX 18.7 — vol modérée</span></div><div class="rank-row"><span class="rank-lbl">Volatilité</span><span style="font-size:11px">↔ Sentiment: Régime « Mixed / Selective » — sentiment mixte</span></div><div class="rank-row"><span class="rank-lbl">Sentiment</span><span style="font-size:11px">↔ Flux: Flux indécis, sélectifs</span></div><div class="rank-row"><span class="rank-lbl">Flux</span><span style="font-size:11px">→ Devises: USD favorisé (80) · GBP délaissé (8)</span></div><div class="rank-row"><span class="rank-lbl">Devises</span><span style="font-size:11px">↔ Actifs: Les setups prioritaires exploitent les différentiels de force identifiés ci-dessus</span></div>
+      </div>
+    </div>
+    <div class="brief">
+      <div class="sub-lbl" style="margin-top:0">📋 POURQUOI CES ACTIFS SONT SÉLECTIONNÉS</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="rank-row"><span class="rank-lbl">GBP/USD</span><span style="font-size:11px">SHORT GBP/USD car GBP (8/100) est plus faible que USD (80/100), différentiel de -72 points. ⚠️ GBP en capitulation (IPS 3) — risque de squeeze inverse contre le biais.</span></div><div class="rank-row"><span class="rank-lbl">USD/CHF</span><span style="font-size:11px">LONG USD/CHF car USD (80/100) est plus fort que CHF (12/100), différentiel de +68 points.</span></div><div class="rank-row"><span class="rank-lbl">GBP/JPY</span><span style="font-size:11px">SHORT GBP/JPY car GBP (8/100) est plus faible que JPY (60/100), différentiel de -52 points. ⚠️ GBP en capitulation (IPS 3) — risque de squeeze inverse contre le biais.</span></div>
+      </div>
+    </div>
+    <div class="brief" style="margin-bottom:0">
+      <div class="sub-lbl" style="margin-top:0">⚠️ RISQUES D'INVALIDATION</div>
+      <div style="font-family:var(--mono);font-size:11px">
+        <div class="risk-row">⚠️ MOVE au-dessus de 120 → stress rates, dégradation du régime.</div><div class="risk-row">⚠️ GBP en positionnement extrême (IPS 3) et impliqué dans GBP/USD — risque de squeeze inverse.</div><div class="risk-row">⚠️ JPY en positionnement extrême (IPS 16) et impliqué dans GBP/JPY — risque de squeeze inverse.</div>
+      </div>
+    </div>
+  </div>
+</div></div><!-- /wrap -->
+<div class="footer">CONFIDENTIEL — BLUESTAR SYSTEM · FX INSTITUTIONAL DESK · Macro_Briefing_v10_17-07-2026.pdf · 17/07/2026 20:57 CET</div>
+</div><!-- /page -->
+</body>
+</html>

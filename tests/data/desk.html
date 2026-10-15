@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BLUESTAR FX Desk_Signal Report_2026.07.17</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+:root{
+  --royal:#1B45B4;--royal-mid:#2355C3;--royal-light:#E8EEFF;--royal-dim:#6B89D8;
+  --bg:#f5f7fc;--white:#fff;--card:#f0f3fa;--dark:#0d1f4e;--body:#1a1a2e;--sec:#3a4a7a;--muted:#6B89D8;--th:#E8EEFF;
+  --green:#1a7a4a;--grn-bg:#e8f5ee;--grn-bd:#6EE7B7;--grn-tx:#065F46;
+  --red:#c0292a;--red-bg:#fdecea;--red-bd:#FCA5A5;--red-tx:#7F1D1D;
+  --blue:#2355C3;--purple:#1B45B4;
+  --border:#dde3f5;--border2:#bbc6e8;--r:5px;--rl:7px;--gap:12px;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex Mono','SF Mono','Courier New',monospace
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--body);font-family:var(--sans);font-size:12px;line-height:1.45;-webkit-font-smoothing:antialiased}
+#page{max-width:1180px;margin:0 auto;background:var(--bg)}
+.wrap{padding:14px 20px}
+.section{background:var(--white);border:1px solid var(--border);border-radius:var(--rl);margin-bottom:var(--gap);overflow:hidden;box-shadow:0 1px 3px rgba(13,31,78,.03)}
+.sec-hdr{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);background:var(--white)}
+.sec-num{width:22px;height:22px;border-radius:50%;background:var(--royal);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--mono)}
+.sec-ttl{font-size:12px;font-weight:700;color:var(--dark);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono)}
+.sec-sub{margin-left:auto;font-size:9.5px;color:var(--muted);font-style:italic}
+.sec-body{padding:12px 16px}
+.banner{background:var(--red-bg);border:1px solid var(--red-bd);color:var(--red-tx);border-radius:var(--r);padding:9px 14px;margin-bottom:12px;font-family:var(--mono);font-size:10.5px;font-weight:600}
+.setup{border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:11px;box-shadow:0 1px 2px rgba(13,31,78,.03)}
+.setup:last-child{margin-bottom:0}
+.setup.aaa{border-left:3px solid var(--royal)}.setup.aa{border-left:3px solid var(--royal-mid)}.setup.a{border-left:3px solid var(--green)}.setup.bbb{border-left:3px solid var(--muted)}.setup.bb{border-left:3px solid var(--border2)}.setup.b{border-left:3px solid var(--border2)}
+.setup-hdr{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.setup-hdr.long{background:var(--grn-bg)}.setup-hdr.short{background:var(--red-bg)}
+.pair{font-size:16px;font-weight:700;font-family:var(--mono);color:var(--dark)}
+.dir{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:4px;font-size:10.5px;font-weight:700;font-family:var(--mono)}
+.dir.long{background:var(--grn-bg);border:1px solid var(--grn-bd);color:var(--grn-tx)}
+.dir.short{background:var(--red-bg);border:1px solid var(--red-bd);color:var(--red-tx)}
+.conv{display:inline-flex;padding:2px 9px;border-radius:4px;font-size:10.5px;font-weight:700;font-family:var(--mono)}
+.conv.aaa{background:var(--royal-light);border:1px solid var(--royal-dim);color:var(--royal)}
+.conv.aa{background:var(--royal-light);border:1px solid var(--royal-dim);color:var(--royal-mid)}
+.conv.a{background:var(--grn-bg);border:1px solid var(--grn-bd);color:var(--green)}
+.conv.bbb,.conv.bb,.conv.b{background:var(--card);border:1px solid var(--border2);color:var(--sec)}
+.scen-lbl{margin-left:auto;font-size:9.5px;color:var(--muted);font-family:var(--mono)}
+.setup-body{padding:12px 16px;background:var(--white)}
+.metrics-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-bottom:11px;padding:9px;background:var(--card);border:1px solid var(--border);border-radius:var(--r)}
+.metric{text-align:center;padding:3px 0}
+.metric-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-family:var(--mono);margin-bottom:2px}
+.metric-val{font-size:12px;font-weight:700;font-family:var(--mono)}
+.metric-val.ok{color:var(--green)}.metric-val.warn{color:var(--royal)}.metric-val.danger{color:var(--red)}
+.factor-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-bottom:11px;padding:9px;background:var(--royal-light);border:1px solid var(--royal-dim);border-radius:var(--r)}
+.factor{text-align:center}
+.factor-lbl{font-size:7.5px;color:var(--royal);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:2px;font-weight:700}
+.factor-val{font-size:12px;font-weight:700;font-family:var(--mono);color:var(--dark)}
+.factor-val.miss{color:var(--muted);font-style:italic}
+.factor.mean .factor-val{color:var(--royal)}
+.px-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:11px}
+.px-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;text-align:center}
+.px-card.entry{border-top:2px solid var(--royal)}.px-card.sl{border-top:2px solid var(--red)}.px-card.tp1{border-top:2px solid var(--green)}.px-card.tp2{border-top:2px solid var(--royal-mid)}.px-card.rr{border-top:2px solid var(--royal-dim)}
+.px-lbl{font-size:7.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;font-weight:600;margin-bottom:3px;font-family:var(--mono)}
+.px-val{font-size:14px;font-weight:700;font-family:var(--mono)}
+.px-sub{font-size:8.5px;color:var(--muted);margin-top:2px}
+.rationale{background:var(--royal-light);border-left:3px solid var(--royal);padding:9px 12px;font-size:11px;color:var(--dark);margin-bottom:10px;line-height:1.55;border-radius:var(--r)}
+.rationale strong{display:block;font-size:8.5px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;color:var(--royal);font-family:var(--mono)}
+.flags-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.flag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;font-family:var(--mono)}
+.flag.minor{background:var(--royal-light);border:1px solid var(--royal-dim);color:var(--royal-mid)}
+.flag.major{background:var(--red-bg);border:1px solid var(--red-bd);color:var(--red-tx)}
+.cap-note{font-size:9.5px;color:var(--red);font-family:var(--mono);font-weight:600;margin-bottom:8px}
+.cluster-tag{font-size:9px;font-family:var(--mono);color:var(--sec);background:var(--card);border:1px solid var(--border2);padding:1px 7px;border-radius:4px}
+.cal-row{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--sec);margin-bottom:10px}
+.cal-ok,.cal-prox,.cal-proximity,.cal-blackout,.cal-watch{padding:2px 8px;border-radius:4px;font-size:9.5px;font-weight:700;font-family:var(--mono)}
+.cal-ok{background:var(--grn-bg);border:1px solid var(--grn-bd);color:var(--grn-tx)}
+.cal-watch,.cal-prox,.cal-proximity{background:var(--royal-light);border:1px solid var(--royal-dim);color:var(--royal-mid)}
+.cal-blackout{background:var(--red-bg);border:1px solid var(--red-bd);color:var(--red-tx)}
+.sub-lbl{font-size:8.5px;font-weight:700;color:var(--royal);text-transform:uppercase;letter-spacing:1px;margin:11px 0 7px;font-family:var(--mono)}
+.sub-lbl:first-child{margin-top:0}
+.elim{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--border2);border-radius:var(--r);padding:8px 12px;margin-bottom:6px;display:flex;align-items:flex-start;gap:10px}
+.elim.sus{border-left-color:var(--red);background:var(--red-bg)}
+.elim-pair{font-size:12px;font-weight:700;font-family:var(--mono);color:var(--sec);min-width:84px;flex-shrink:0}
+.elim-txt{font-size:10px;color:var(--muted)}
+hr.div{border:none;border-top:1px solid var(--border);margin:9px 0}
+table{width:100%;border-collapse:collapse;font-size:11px}
+thead tr{background:var(--royal)!important}
+thead th{padding:7px 10px;text-align:left;font-size:8.5px;font-weight:700;color:#fff;letter-spacing:.8px;text-transform:uppercase;white-space:nowrap;font-family:var(--mono)}
+tbody tr{border-bottom:1px solid var(--border)}
+tbody tr:nth-child(even){background:var(--card)}
+tbody td{padding:5px 10px;vertical-align:middle}
+.no-setup{background:var(--card);border:2px dashed var(--border2);border-radius:var(--rl);padding:36px 20px;text-align:center}
+.no-setup-icon{font-size:32px;margin-bottom:10px}.no-setup-title{font-size:15px;font-weight:700;color:var(--dark);margin-bottom:6px}.no-setup-sub{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.reject-code{font-family:var(--mono);font-size:9.5px;font-weight:700;color:var(--red)}
+.audit-block{background:#0d1f4e;color:#E8EEFF;border-radius:var(--r);padding:9px 12px;margin-top:10px;font-family:var(--mono);font-size:9px;line-height:1.55;word-break:break-word}
+.audit-block strong{color:#6EE7B7;font-size:8.5px;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:4px}
+.footer{text-align:center;font-family:var(--mono);font-size:7.5px;color:var(--muted);border-top:1px solid var(--border);padding:9px 20px;margin-top:4px;letter-spacing:1.2px}
+.page-header{background:linear-gradient(135deg,#F8FAFF 0%,#F0F4FE 100%);border:1px solid var(--border);border-radius:var(--rl) var(--rl) 0 0;display:flex;align-items:center;justify-content:space-between;padding:13px 24px;box-shadow:0 1px 4px rgba(13,31,78,.04),inset 0 1px 0 rgba(255,255,255,.8);position:relative}
+.page-header::after{content:'';position:absolute;bottom:0;left:24px;right:24px;height:2px;background:linear-gradient(90deg,var(--royal),var(--royal-dim),transparent);border-radius:2px}
+.header-left{display:flex;align-items:center;gap:14px}
+.logo-marker{width:42px;height:42px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--white);border:1px solid var(--border);border-radius:var(--r)}
+.sys-label{font-size:8.5px;letter-spacing:.3em;color:var(--royal-dim);font-family:var(--mono);font-weight:600;text-transform:uppercase}
+.sys-name{font-size:26px;font-weight:700;color:var(--dark);letter-spacing:-.02em;line-height:1.1;font-family:var(--mono)}
+.sys-desc{font-size:8.5px;color:var(--muted);font-family:var(--mono);margin-top:2px;letter-spacing:.02em}
+.header-right{text-align:right;border-left:1px solid var(--border2);padding-left:18px}
+.briefing-label{font-size:10.5px;color:var(--royal);font-family:var(--mono);letter-spacing:.08em;font-weight:600;text-transform:uppercase}
+.briefing-sub{font-size:8.5px;color:var(--sec);font-family:var(--mono);margin-top:4px;letter-spacing:.02em}
+.page-subbar{background:rgba(27,69,180,.04);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:7px 24px;display:flex;align-items:center;gap:22px;flex-wrap:wrap;font-size:9.5px;font-family:var(--mono);color:var(--sec)}
+.confidential{margin-left:auto;color:var(--royal);font-weight:600;background:rgba(27,69,180,.08);padding:2px 10px;border-radius:20px;font-size:8.5px}
+.page-top{display:block}
+
+/* ═══════════════ PDF / PRINT — CALIBRAGE A4 ZÉRO-BORD ═══════════════ */
+@page{size:A4 portrait;margin:0}
+
+#pdf-fab{position:fixed;bottom:28px;right:28px;z-index:9999}
+#pdf-fab button{background:#1B45B4;color:#fff;border:none;padding:11px 20px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(27,69,180,.45)}
+@media print{
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+  html{background:var(--bg)!important;margin:0!important;padding:0!important;width:100%!important;zoom:1!important}
+  body{background:var(--bg)!important;margin:0!important;padding:0!important;width:100%!important;font-size:7pt!important;line-height:1.38!important}
+  #page{max-width:none!important;width:100%!important;margin:0!important;padding:0!important;background:var(--bg)!important}
+
+  /* ── EN-TÊTE : dans le flux du wrap, margin négatif pour full-bleed ── */
+  .page-top{
+    break-inside:avoid!important;break-after:avoid!important;
+    margin:-5mm -5mm 4mm -5mm!important;
+  }
+  .page-header{
+    border-radius:0!important;box-shadow:none!important;
+    padding:3px 5mm!important;min-height:0!important;
+    border-left:none!important;border-right:none!important;border-top:none!important;
+    border-bottom:1px solid var(--border)!important;
+  }
+  .page-header::after{display:none!important}
+  .header-left{gap:6px!important}
+  .sys-name{font-size:10px!important;line-height:1!important}
+  .sys-label{font-size:5pt!important;letter-spacing:.1em!important}
+  .sys-desc{font-size:5pt!important;margin-top:0!important}
+  .briefing-label{font-size:5pt!important}
+  .briefing-sub{font-size:5pt!important;margin-top:1px!important}
+  .logo-marker{width:16px!important;height:16px!important;padding:1px!important}
+  .logo-marker svg{width:14px!important;height:14px!important}
+  .header-right{padding-left:8px!important}
+  .page-subbar{
+    padding:2px 5mm!important;gap:6px!important;font-size:5.5pt!important;
+    border-left:none!important;border-right:none!important;
+    border-bottom:1px solid var(--border)!important;
+  }
+  .confidential{font-size:5pt!important;padding:1px 6px!important}
+  .wrap{padding:5mm 5mm 8mm 5mm!important}
+
+  /* ── SECTION ── */
+  .section{overflow:visible!important;box-shadow:none!important;margin-bottom:7px!important;border:1px solid var(--border)!important}
+  .sec-body{overflow:visible!important;padding:7px 6px!important}
+  .sec-hdr{padding:5px 10px!important;break-after:avoid!important;page-break-after:avoid!important}
+  .sec-num{width:16px!important;height:16px!important;font-size:7pt!important}
+  .sec-ttl{font-size:8pt!important}
+  .sec-sub{font-size:7pt!important}
+
+  /* ── SETUP CARD : autoriser la fragmentation si trop grand, mais garder hdr+premier bloc solidaires ── */
+  .setup{overflow:visible!important;box-shadow:none!important;margin-bottom:6px!important;
+         break-inside:auto!important;page-break-inside:auto!important}
+  .setup-hdr{padding:5px 10px!important;gap:6px!important;
+             break-before:avoid!important;page-break-before:avoid!important;
+             break-after:avoid!important;page-break-after:avoid!important;
+             break-inside:avoid!important;page-break-inside:avoid!important}
+  .factor-grid{padding:4px 6px!important;gap:3px!important;margin-bottom:5px!important;
+               break-before:avoid!important;page-break-before:avoid!important;
+               break-inside:avoid!important;page-break-inside:avoid!important}
+  .setup-body{padding:6px 10px!important}
+  .pair{font-size:12.5px!important}
+  .dir,.conv{font-size:7.5pt!important;padding:1px 6px!important}
+  .scen-lbl{font-size:7pt!important}
+  .cluster-tag{font-size:7pt!important}
+
+  /* ── GRILLES ── */
+  .factor-lbl{font-size:6pt!important;margin-bottom:1px!important}
+  .factor-val{font-size:9pt!important}
+  .metrics-grid{padding:4px 6px!important;gap:3px!important;margin-bottom:5px!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .metric-lbl{font-size:6pt!important;margin-bottom:1px!important}
+  .metric-val{font-size:9pt!important}
+  .px-grid{gap:4px!important;margin-bottom:5px!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .px-card{padding:4px 7px!important}
+  .px-lbl{font-size:6pt!important;margin-bottom:1px!important}
+  .px-val{font-size:10.5pt!important}
+  .px-sub{font-size:6.5pt!important;margin-top:1px!important}
+
+  /* ── RATIONALE & AUDIT ── */
+  .rationale{padding:5px 8px!important;margin-bottom:5px!important;font-size:6.8pt!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .rationale strong{font-size:6pt!important;margin-bottom:2px!important}
+  .flags-row{gap:4px!important;margin-bottom:5px!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .flag{font-size:6.5pt!important;padding:1px 5px!important}
+  .cap-note{font-size:6.5pt!important;margin-bottom:4px!important}
+  .cal-row{font-size:7pt!important;margin-bottom:5px!important;gap:5px!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .cal-ok,.cal-prox,.cal-proximity,.cal-blackout,.cal-watch{font-size:6.5pt!important;padding:1px 5px!important}
+  .audit-block{padding:5px 8px!important;margin-top:5px!important;font-size:5.9pt!important;line-height:1.32!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .audit-block strong{font-size:6pt!important;margin-bottom:2px!important}
+  .banner{padding:5px 8px!important;margin-bottom:7px!important;font-size:7pt!important;break-inside:avoid!important;page-break-inside:avoid!important}
+
+  /* ── SECTION 2 ── */
+  .section + .section{break-before:page!important;page-break-before:always!important}
+  .sub-lbl{font-size:7pt!important;break-after:avoid!important;page-break-after:avoid!important}
+  .elim{padding:5px 8px!important;margin-bottom:4px!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .elim-pair{font-size:8pt!important;min-width:60px!important}
+  .elim-txt{font-size:7pt!important}
+
+  /* ── TABLE ── */
+  table{font-size:7pt!important}
+  thead th{padding:4px 7px!important;font-size:6.5pt!important}
+  tbody td{padding:3px 7px!important}
+  tr,thead{break-inside:avoid!important;page-break-inside:avoid!important}
+  thead{display:table-header-group!important}
+  tfoot{display:table-footer-group!important}
+  .reject-code{font-size:7pt!important}
+
+  /* ── DIVERS ── */
+  .print-ctx-bar{display:none!important}
+  .sus-grid{grid-template-columns:repeat(3,1fr)!important;gap:4px!important}
+  .sus-item{padding:3px 7px!important;break-inside:avoid!important;page-break-inside:avoid!important}
+  .sus-item-pair{font-size:8pt!important}
+  .sus-item-txt{font-size:6.5pt!important}
+  p,li{orphans:3;widows:3}
+  .footer{display:block!important;padding:5px 5mm!important;font-size:6pt!important;letter-spacing:0!important;border-top:1px solid var(--border)!important}
+  a[href]:after{content:""!important}
+  #pdf-fab{display:none!important}
+}
+/* Context bar : masqué écran, repère contextuel print page 1 uniquement */
+.print-ctx-bar{display:none}
+
+/* Blackout grid compact */
+.sus-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:8px}
+.sus-item{background:var(--red-bg);border:1px solid var(--red-bd);border-left:3px solid var(--red);border-radius:var(--r);padding:5px 9px;display:flex;flex-direction:column;gap:2px}
+.sus-item-pair{font-family:var(--mono);font-weight:700;font-size:11px;color:var(--dark)}
+.sus-item-txt{font-size:9px;color:var(--muted)}
+
+</style>
+</head>
+<body>
+<script>
+function downloadHtml(){
+  const html='<!DOCTYPE html>
+'+document.documentElement.outerHTML;
+  const blob=new Blob([html],{type:'text/html'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download="BLUESTAR FX Desk_Signal Report_2026.07.17.html";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+</script>
+<div id="pdf-fab"><button onclick="window.print()">Télécharger PDF</button></div>
+<div id="page">
+<div class="wrap">
+<div class="page-top">
+<div class="page-header">
+  <div class="header-left">
+    <div class="logo-marker"><svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M12 17.27L18.18 21L16.54 13.97L22 9.24L14.81 8.63L12 2L9.19 8.63L2 9.24L7.46 13.97L5.82 21L12 17.27Z" fill="#1B45B4"/></svg></div>
+    <div><div class="sys-label">BLUESTAR SYSTEM</div><div class="sys-name">BLUESTAR</div><div class="sys-desc">FX INSTITUTIONAL DESK · v10 HYBRID V4</div></div>
+  </div>
+  <div class="header-right"><div class="briefing-label">FX CASCADE · TRADER</div><div class="briefing-sub">2026-07-17 22:40 GMT+1</div></div>
+</div>
+<div class="page-subbar">
+  <span>2026-07-17 22:40 GMT+1</span><span>GMT+1</span>
+  <span style="background:rgba(27,69,180,.12);color:var(--royal);padding:2px 10px;border-radius:20px;font-weight:700;border:1px solid var(--royal-dim)">5 setup(s)</span>
+  <span>Universe <strong>11/33</strong></span>
+  <span>Event Risk : <strong style="color:var(--green)">Low</strong></span>
+  <span>Thèmes : NZD Bearish, JPY Bearish, CHF Bullish</span>
+  
+  <span class="confidential">CONFIDENTIEL</span>
+</div>
+</div><!-- /.page-top -->
+
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">1</div><div class="sec-ttl">Setups Valides</div><div class="sec-sub">5 validé(s) · Universe 11/33</div></div>
+  <div class="sec-body">
+  
+  
+  <div class="print-ctx-bar">5 setup(s) validé(s) &nbsp;·&nbsp; Universe 11/33 &nbsp;·&nbsp; Event Risk : <strong>Low</strong> &nbsp;·&nbsp; 2026-07-17 22:40 GMT+1</div>
+  
+  
+  
+  
+  
+  <div class="setup bbb">
+    <div class="setup-hdr long">
+      <span class="pair">EUR/JPY</span>
+      <span class="dir long">▲ Bullish</span>
+      <span class="conv bbb">BBB (0.77)</span>
+      <span class="cluster-tag">JPY_weak</span>
+      <span class="scen-lbl">trend frais · Market</span>
+    </div>
+    <div class="setup-body">
+      <div class="factor-grid">
+        <div class="factor"><div class="factor-lbl">F1 HWA</div><div class="factor-val ">0.90</div></div>
+        <div class="factor"><div class="factor-lbl">F2 RMG</div><div class="factor-val ">0.28</div></div>
+        <div class="factor"><div class="factor-lbl">F3 EXT</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F4 TRG</div><div class="factor-val miss">0.00</div></div>
+        <div class="factor"><div class="factor-lbl">F5 XCTX</div><div class="factor-val miss">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F6 THM</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F7 MAC</div><div class="factor-val ">1.00</div></div>
+        <div class="factor mean"><div class="factor-lbl">Q-rang</div><div class="factor-val">0.86</div></div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="metric-lbl">Distance ATR</div><div class="metric-val ok">0.0×</div></div>
+        <div class="metric"><div class="metric-lbl">Score CHoCH</div><div class="metric-val danger">—</div></div>
+        <div class="metric"><div class="metric-lbl">Quality</div><div class="metric-val ok">A+</div></div>
+        <div class="metric"><div class="metric-lbl">MTF %</div><div class="metric-val ok">91%</div></div>
+        <div class="metric"><div class="metric-lbl">RSI H4</div><div class="metric-val ok">56.2</div></div>
+        <div class="metric"><div class="metric-lbl">Age</div><div class="metric-val ok">3j</div></div>
+      </div>
+      <div class="px-grid">
+        <div class="px-card entry"><div class="px-lbl">Entry</div><div class="px-val" style="color:var(--royal)">185.7725</div><div class="px-sub">Market</div></div>
+        <div class="px-card sl"><div class="px-lbl">Stop Loss</div><div class="px-val" style="color:var(--red)">185.38685</div><div class="px-sub">1.5×ATR</div></div>
+        <div class="px-card tp1"><div class="px-lbl">TP1 (60%)</div><div class="px-val" style="color:var(--green)">186.2867</div><div class="px-sub">2.0×ATR</div></div>
+        <div class="px-card tp2"><div class="px-lbl">TP2 (40%)</div><div class="px-val" style="color:var(--blue)">186.5438</div><div class="px-sub">3.0×ATR</div></div>
+        <div class="px-card rr"><div class="px-lbl">R : R</div><div class="px-val" style="color:var(--purple)">1.6</div><div class="px-sub">pondéré 60/40</div></div>
+      </div>
+      
+      <div class="cap-note">Plafond conviction appliqué : ATR synthétique</div>
+      <div class="rationale"><strong>Rationale</strong>Score absolu 0.84 · forts: F3=1.00, F6=1.00, F7=1.00 · thème favorable (1.00) · état CLEAN_CONTINUATION</div>
+      <div class="cal-row"><span class="cal-ok">OK</span></div>
+      <div class="audit-block"><strong>Audit Trail</strong>Raw SL=185.38685 (Normal ×1.5)<br>RR=(0.6×0.51420+0.4×0.77130)/0.38565=1.60 [TP1 synth 2×ATR, TP2 synth]<br>absolute_mean=0.7679 · raw=0.8366 · decay=0.9179 · quantile=0.8636 · missing=[&#39;f4_trg&#39;, &#39;f5_xctx&#39;]<br>HWA num=17/den=21 raw=0.81 conflits=[&#39;M15&#39;]<br>RMG fast=49.9 slow=57.1 grad=-7.1 signed=-7.1<br>0/5 TF surchauffés dans le sens (checked=5)<br>pas de trigger aligné<br>trigger absent (contexte neutre)<br>THEME EUR/JPY dir=Bullish strong={&#39;NZD&#39;: &#39;Bearish&#39;, &#39;JPY&#39;: &#39;Bearish&#39;, &#39;CHF&#39;: &#39;Bullish&#39;} -&gt; 1.00<br>aucun event S/A futur<br>ATR=h4 · cluster=JPY_weak · htf=True</div>
+    </div>
+  </div>
+  
+  
+  
+  
+  
+  <div class="setup bbb">
+    <div class="setup-hdr long">
+      <span class="pair">EUR/AUD</span>
+      <span class="dir long">▲ Bullish</span>
+      <span class="conv bbb">BBB (0.72)</span>
+      <span class="cluster-tag">isolated:EUR/AUD</span>
+      <span class="scen-lbl">CHoCH H4 3c score=65 · trend frais · Market</span>
+    </div>
+    <div class="setup-body">
+      <div class="factor-grid">
+        <div class="factor"><div class="factor-lbl">F1 HWA</div><div class="factor-val ">0.81</div></div>
+        <div class="factor"><div class="factor-lbl">F2 RMG</div><div class="factor-val ">0.76</div></div>
+        <div class="factor"><div class="factor-lbl">F3 EXT</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F4 TRG</div><div class="factor-val ">0.74</div></div>
+        <div class="factor"><div class="factor-lbl">F5 XCTX</div><div class="factor-val ">0.66</div></div>
+        <div class="factor"><div class="factor-lbl">F6 THM</div><div class="factor-val ">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F7 MAC</div><div class="factor-val ">1.00</div></div>
+        <div class="factor mean"><div class="factor-lbl">Q-rang</div><div class="factor-val">0.41</div></div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="metric-lbl">Distance ATR</div><div class="metric-val ok">0.04×</div></div>
+        <div class="metric"><div class="metric-lbl">Score CHoCH</div><div class="metric-val warn">65</div><div style="font-size:7px;color:var(--muted);font-family:var(--mono);margin-top:1px">H4 Bullish 65 (3c)</div></div>
+        <div class="metric"><div class="metric-lbl">Quality</div><div class="metric-val ok">A</div></div>
+        <div class="metric"><div class="metric-lbl">MTF %</div><div class="metric-val warn">63%</div></div>
+        <div class="metric"><div class="metric-lbl">RSI H4</div><div class="metric-val ok">47.4</div></div>
+        <div class="metric"><div class="metric-lbl">Age</div><div class="metric-val ok">3j</div></div>
+      </div>
+      <div class="px-grid">
+        <div class="px-card entry"><div class="px-lbl">Entry</div><div class="px-val" style="color:var(--royal)">1.63833</div><div class="px-sub">Market</div></div>
+        <div class="px-card sl"><div class="px-lbl">Stop Loss</div><div class="px-val" style="color:var(--red)">1.63413</div><div class="px-sub">1.5×ATR</div></div>
+        <div class="px-card tp1"><div class="px-lbl">TP1 (60%)</div><div class="px-val" style="color:var(--green)">1.64393</div><div class="px-sub">2.0×ATR</div></div>
+        <div class="px-card tp2"><div class="px-lbl">TP2 (40%)</div><div class="px-val" style="color:var(--blue)">1.66508</div><div class="px-sub">9.55×ATR</div></div>
+        <div class="px-card rr"><div class="px-lbl">R : R</div><div class="px-val" style="color:var(--purple)">3.35</div><div class="px-sub">pondéré 60/40</div></div>
+      </div>
+      
+      <div class="cap-note">Plafond conviction appliqué : ATR synthétique</div>
+      <div class="rationale"><strong>Rationale</strong>Score absolu 0.78 · forts: F3=1.00, F7=1.00, F1=0.81 · trigger Bullish H4 (Tokyo, Normal) · état PULLBACK_CONTINUATION</div>
+      <div class="cal-row"><span class="cal-ok">OK</span></div>
+      <div class="audit-block"><strong>Audit Trail</strong>Raw SL=1.63413 (Normal ×1.5)<br>RR=(0.6×0.00560+0.4×0.02675)/0.00420=3.35 [TP1 synth 2×ATR]<br>absolute_mean=0.7186 · raw=0.7829 · decay=0.9179 · quantile=0.4091 · missing=[]<br>HWA num=13/den=21 raw=0.62 conflits=[&#39;H4&#39;]<br>RMG fast=51.6 slow=42.7 grad=8.8 signed=8.8<br>0/5 TF surchauffés dans le sens (checked=5)<br>TRG score_n=0.76 fresh=0.50 prox=0.96 (conf=65, 3c, 0.04ATR) | SR: aucune zone compatible &lt;2.0%<br>XCTX force=1.0 vol=0.6 sess=0.5 bb=0.6 (Fort/Moyenne/Tokyo/Normal)<br>THEME EUR/AUD dir=Bullish strong={&#39;NZD&#39;: &#39;Bearish&#39;, &#39;JPY&#39;: &#39;Bearish&#39;, &#39;CHF&#39;: &#39;Bullish&#39;} -&gt; 0.50<br>aucun event S/A futur<br>ATR=atr_h4 · cluster=isolated:EUR/AUD · htf=False</div>
+    </div>
+  </div>
+  
+  
+  
+  
+  
+  <div class="setup bbb">
+    <div class="setup-hdr long">
+      <span class="pair">GBP/AUD</span>
+      <span class="dir long">▲ Bullish</span>
+      <span class="conv bbb">BBB (0.43)</span>
+      <span class="cluster-tag">isolated:GBP/AUD</span>
+      <span class="scen-lbl">trend mûr · Market</span>
+    </div>
+    <div class="setup-body">
+      <div class="factor-grid">
+        <div class="factor"><div class="factor-lbl">F1 HWA</div><div class="factor-val ">0.90</div></div>
+        <div class="factor"><div class="factor-lbl">F2 RMG</div><div class="factor-val ">0.30</div></div>
+        <div class="factor"><div class="factor-lbl">F3 EXT</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F4 TRG</div><div class="factor-val miss">0.00</div></div>
+        <div class="factor"><div class="factor-lbl">F5 XCTX</div><div class="factor-val miss">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F6 THM</div><div class="factor-val ">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F7 MAC</div><div class="factor-val ">1.00</div></div>
+        <div class="factor mean"><div class="factor-lbl">Q-rang</div><div class="factor-val">0.23</div></div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="metric-lbl">Distance ATR</div><div class="metric-val ok">0.0×</div></div>
+        <div class="metric"><div class="metric-lbl">Score CHoCH</div><div class="metric-val danger">—</div></div>
+        <div class="metric"><div class="metric-lbl">Quality</div><div class="metric-val ok">A+</div></div>
+        <div class="metric"><div class="metric-lbl">MTF %</div><div class="metric-val ok">89%</div></div>
+        <div class="metric"><div class="metric-lbl">RSI H4</div><div class="metric-val ok">48.7</div></div>
+        <div class="metric"><div class="metric-lbl">Age</div><div class="metric-val warn">19j</div></div>
+      </div>
+      <div class="px-grid">
+        <div class="px-card entry"><div class="px-lbl">Entry</div><div class="px-val" style="color:var(--royal)">1.92674</div><div class="px-sub">Market</div></div>
+        <div class="px-card sl"><div class="px-lbl">Stop Loss</div><div class="px-val" style="color:var(--red)">1.92119</div><div class="px-sub">1.5×ATR</div></div>
+        <div class="px-card tp1"><div class="px-lbl">TP1 (60%)</div><div class="px-val" style="color:var(--green)">1.93648</div><div class="px-sub">2.63×ATR</div></div>
+        <div class="px-card tp2"><div class="px-lbl">TP2 (40%)</div><div class="px-val" style="color:var(--blue)">1.94018</div><div class="px-sub">3.63×ATR</div></div>
+        <div class="px-card rr"><div class="px-lbl">R : R</div><div class="px-val" style="color:var(--purple)">2.02</div><div class="px-sub">pondéré 60/40</div></div>
+      </div>
+      
+      <div class="cap-note">Plafond conviction appliqué : ATR synthétique</div>
+      <div class="rationale"><strong>Rationale</strong>Score absolu 0.74 · forts: F3=1.00, F7=1.00, F1=0.90 · état CLEAN_CONTINUATION</div>
+      <div class="cal-row"><span class="cal-ok">OK</span></div>
+      <div class="audit-block"><strong>Audit Trail</strong>Raw SL=1.92119 (Normal ×1.5)<br>RR=(0.6×0.00974+0.4×0.01344)/0.00555=2.02 [TP2 synth]<br>absolute_mean=0.4302 · raw=0.7403 · decay=0.5811 · quantile=0.2273 · missing=[&#39;f4_trg&#39;, &#39;f5_xctx&#39;]<br>HWA num=17/den=21 raw=0.81 conflits=[&#39;H1&#39;]<br>RMG fast=47.9 slow=54.4 grad=-6.5 signed=-6.5<br>0/5 TF surchauffés dans le sens (checked=5)<br>pas de trigger aligné<br>trigger absent (contexte neutre)<br>THEME GBP/AUD dir=Bullish strong={&#39;NZD&#39;: &#39;Bearish&#39;, &#39;JPY&#39;: &#39;Bearish&#39;, &#39;CHF&#39;: &#39;Bullish&#39;} -&gt; 0.50<br>aucun event S/A futur<br>ATR=h4 · cluster=isolated:GBP/AUD · htf=True</div>
+    </div>
+  </div>
+  
+  
+  
+  
+  
+  <div class="setup bbb">
+    <div class="setup-hdr short">
+      <span class="pair">USD/CHF</span>
+      <span class="dir short">▼ Bearish</span>
+      <span class="conv bbb">BBB (0.34)</span>
+      <span class="cluster-tag">CHF_strong</span>
+      <span class="scen-lbl">trend âgé 34j · Market</span>
+    </div>
+    <div class="setup-body">
+      <div class="factor-grid">
+        <div class="factor"><div class="factor-lbl">F1 HWA</div><div class="factor-val ">0.86</div></div>
+        <div class="factor"><div class="factor-lbl">F2 RMG</div><div class="factor-val ">0.67</div></div>
+        <div class="factor"><div class="factor-lbl">F3 EXT</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F4 TRG</div><div class="factor-val miss">0.00</div></div>
+        <div class="factor"><div class="factor-lbl">F5 XCTX</div><div class="factor-val miss">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F6 THM</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F7 MAC</div><div class="factor-val ">1.00</div></div>
+        <div class="factor mean"><div class="factor-lbl">Q-rang</div><div class="factor-val">0.95</div></div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="metric-lbl">Distance ATR</div><div class="metric-val ok">0.0×</div></div>
+        <div class="metric"><div class="metric-lbl">Score CHoCH</div><div class="metric-val danger">—</div></div>
+        <div class="metric"><div class="metric-lbl">Quality</div><div class="metric-val ok">A</div></div>
+        <div class="metric"><div class="metric-lbl">MTF %</div><div class="metric-val warn">65%</div></div>
+        <div class="metric"><div class="metric-lbl">RSI H4</div><div class="metric-val ok">47.6</div></div>
+        <div class="metric"><div class="metric-lbl">Age</div><div class="metric-val danger">34j</div></div>
+      </div>
+      <div class="px-grid">
+        <div class="px-card entry"><div class="px-lbl">Entry</div><div class="px-val" style="color:var(--royal)">0.80751</div><div class="px-sub">Market</div></div>
+        <div class="px-card sl"><div class="px-lbl">Stop Loss</div><div class="px-val" style="color:var(--red)">0.81036</div><div class="px-sub">1.5×ATR</div></div>
+        <div class="px-card tp1"><div class="px-lbl">TP1 (60%)</div><div class="px-val" style="color:var(--green)">0.80371</div><div class="px-sub">2.0×ATR</div></div>
+        <div class="px-card tp2"><div class="px-lbl">TP2 (40%)</div><div class="px-val" style="color:var(--blue)">0.80181</div><div class="px-sub">3.0×ATR</div></div>
+        <div class="px-card rr"><div class="px-lbl">R : R</div><div class="px-val" style="color:var(--purple)">1.6</div><div class="px-sub">pondéré 60/40</div></div>
+      </div>
+      
+      <div class="cap-note">Plafond conviction appliqué : ATR synthétique</div>
+      <div class="rationale"><strong>Rationale</strong>Score absolu 0.91 · forts: F3=1.00, F6=1.00, F7=1.00 · thème favorable (1.00) · état TRANSITION_WATCH · risque: age_d1=34j — structure mature</div>
+      <div class="cal-row"><span class="cal-ok">OK</span></div>
+      <div class="audit-block"><strong>Audit Trail</strong>Raw SL=0.81036 (Normal ×1.5)<br>RR=(0.6×0.00380+0.4×0.00570)/0.00285=1.60 [TP1 synth 2×ATR, TP2 synth]<br>absolute_mean=0.3431 · raw=0.9063 · decay=0.3785 · quantile=0.9545 · missing=[&#39;f4_trg&#39;, &#39;f5_xctx&#39;]<br>HWA num=15/den=21 raw=0.71 conflits=[&#39;M15&#39;]<br>RMG fast=50.5 slow=56.0 grad=-5.5 signed=5.5<br>0/5 TF surchauffés dans le sens (checked=5)<br>pas de trigger aligné<br>trigger absent (contexte neutre)<br>THEME USD/CHF dir=Bearish strong={&#39;NZD&#39;: &#39;Bearish&#39;, &#39;JPY&#39;: &#39;Bearish&#39;, &#39;CHF&#39;: &#39;Bullish&#39;} -&gt; 1.00<br>aucun event S/A futur<br>ATR=h4 · cluster=CHF_strong · htf=False</div>
+    </div>
+  </div>
+  
+  
+  
+  
+  
+  <div class="setup bbb">
+    <div class="setup-hdr long">
+      <span class="pair">US30/USD</span>
+      <span class="dir long">▲ Bullish</span>
+      <span class="conv bbb">BBB (0.20)</span>
+      <span class="cluster-tag">isolated:US30/USD</span>
+      <span class="scen-lbl">trend âgé 72j · Limit</span>
+    </div>
+    <div class="setup-body">
+      <div class="factor-grid">
+        <div class="factor"><div class="factor-lbl">F1 HWA</div><div class="factor-val ">0.71</div></div>
+        <div class="factor"><div class="factor-lbl">F2 RMG</div><div class="factor-val ">0.09</div></div>
+        <div class="factor"><div class="factor-lbl">F3 EXT</div><div class="factor-val ">1.00</div></div>
+        <div class="factor"><div class="factor-lbl">F4 TRG</div><div class="factor-val miss">0.00</div></div>
+        <div class="factor"><div class="factor-lbl">F5 XCTX</div><div class="factor-val miss">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F6 THM</div><div class="factor-val ">0.50</div></div>
+        <div class="factor"><div class="factor-lbl">F7 MAC</div><div class="factor-val ">1.00</div></div>
+        <div class="factor mean"><div class="factor-lbl">Q-rang</div><div class="factor-val">0.05</div></div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="metric-lbl">Distance ATR</div><div class="metric-val ok">0.0×</div></div>
+        <div class="metric"><div class="metric-lbl">Score CHoCH</div><div class="metric-val danger">—</div></div>
+        <div class="metric"><div class="metric-lbl">Quality</div><div class="metric-val ok">A</div></div>
+        <div class="metric"><div class="metric-lbl">MTF %</div><div class="metric-val warn">61%</div></div>
+        <div class="metric"><div class="metric-lbl">RSI H4</div><div class="metric-val ok">38.0</div></div>
+        <div class="metric"><div class="metric-lbl">Age</div><div class="metric-val danger">72j</div></div>
+      </div>
+      <div class="px-grid">
+        <div class="px-card entry"><div class="px-lbl">Entry</div><div class="px-val" style="color:var(--royal)">51775.32855</div><div class="px-sub">Limit</div></div>
+        <div class="px-card sl"><div class="px-lbl">Stop Loss</div><div class="px-val" style="color:var(--red)">51386.63355</div><div class="px-sub">1.5×ATR</div></div>
+        <div class="px-card tp1"><div class="px-lbl">TP1 (60%)</div><div class="px-val" style="color:var(--green)">52293.58855</div><div class="px-sub">2.0×ATR</div></div>
+        <div class="px-card tp2"><div class="px-lbl">TP2 (40%)</div><div class="px-val" style="color:var(--blue)">52552.71855</div><div class="px-sub">3.0×ATR</div></div>
+        <div class="px-card rr"><div class="px-lbl">R : R</div><div class="px-val" style="color:var(--purple)">1.6</div><div class="px-sub">pondéré 60/40</div></div>
+      </div>
+      
+      <div class="cap-note">Plafond conviction appliqué : ATR synthétique</div>
+      <div class="rationale"><strong>Rationale</strong>Score absolu 0.66 · forts: F3=1.00, F7=1.00, F1=0.71 · état TRANSITION_WATCH · risque: age_d1=72j — structure mature</div>
+      <div class="cal-row"><span class="cal-ok">OK</span></div>
+      <div class="audit-block"><strong>Audit Trail</strong>Raw SL=51386.63355 (Normal ×1.5) [zone 51775.32855 au-dessus du SL, pas d&#39;ajustement]<br>RR=(0.6×518.26000+0.4×777.39000)/388.69500=1.60 [TP1 synth 2×ATR, TP2 synth]<br>absolute_mean=0.1980 · raw=0.6599 · decay=0.3000 · quantile=0.0455 · missing=[&#39;f4_trg&#39;, &#39;f5_xctx&#39;]<br>HWA num=9/den=21 raw=0.43 conflits=[&#39;H4&#39;, &#39;H1&#39;, &#39;M15&#39;]<br>RMG fast=40.2 slow=58.1 grad=-17.8 signed=-17.8<br>0/5 TF surchauffés dans le sens (checked=5)<br>pas de trigger aligné<br>trigger absent (contexte neutre)<br>THEME US30/USD dir=Bullish strong={&#39;NZD&#39;: &#39;Bearish&#39;, &#39;JPY&#39;: &#39;Bearish&#39;, &#39;CHF&#39;: &#39;Bullish&#39;} -&gt; 0.50<br>aucun event S/A futur<br>ATR=h4 · cluster=isolated:US30/USD · htf=False</div>
+    </div>
+  </div>
+  
+  
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-hdr"><div class="sec-num">2</div><div class="sec-ttl">Éliminés &amp; Surveillance</div><div class="sec-sub">28 actif(s) filtré(s)</div></div>
+  <div class="sec-body">
+  
+  
+  
+  
+  <div class="sub-lbl">REJETS — Filtre / Preflight / Cluster (28)</div>
+  <table>
+    <thead><tr><th>Paire</th><th>Dir.</th><th>Code</th><th>Détail</th><th>RSI H4</th><th>Age</th><th>Cal.</th></tr></thead>
+    <tbody>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">EUR/CHF</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">45.09</td><td style="font-family:var(--mono);font-size:10px">9j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">AUD/CAD</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">41.5</td><td style="font-family:var(--mono);font-size:10px">1j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">USD/CAD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">34.48</td><td style="font-family:var(--mono);font-size:10px">46j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">GBP/CAD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">41.73</td><td style="font-family:var(--mono);font-size:10px">41j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">GBP/NZD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">35.99</td><td style="font-family:var(--mono);font-size:10px">1j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">NAS100/USD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">35.02</td><td style="font-family:var(--mono);font-size:10px">1j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">SPX500/USD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">35.05</td><td style="font-family:var(--mono);font-size:10px">26j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">XAU/USD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">48.27</td><td style="font-family:var(--mono);font-size:10px">48j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">EUR/GBP</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">48.64</td><td style="font-family:var(--mono);font-size:10px">19j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">EUR/CAD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">36.25</td><td style="font-family:var(--mono);font-size:10px">4j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">CAD/CHF</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">57.34</td><td style="font-family:var(--mono);font-size:10px">5j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">GBP/CHF</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">48.61</td><td style="font-family:var(--mono);font-size:10px">34j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">AUD/CHF</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">49.58</td><td style="font-family:var(--mono);font-size:10px">9j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">NZD/CHF</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">60.35</td><td style="font-family:var(--mono);font-size:10px">6j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">NZD/CAD</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">54.06</td><td style="font-family:var(--mono);font-size:10px">6j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">NZD/USD</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">61.71</td><td style="font-family:var(--mono);font-size:10px">3j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">EUR/NZD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">33.54</td><td style="font-family:var(--mono);font-size:10px">6j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">AUD/NZD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B+</td><td style="font-family:var(--mono);font-size:10px">30.56</td><td style="font-family:var(--mono);font-size:10px">6j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">EUR/USD</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B</td><td style="font-family:var(--mono);font-size:10px">50.78</td><td style="font-family:var(--mono);font-size:10px">46j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">AUD/USD</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B</td><td style="font-family:var(--mono);font-size:10px">52.93</td><td style="font-family:var(--mono);font-size:10px">30j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">GBP/USD</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Bearish</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B</td><td style="font-family:var(--mono);font-size:10px">51.56</td><td style="font-family:var(--mono);font-size:10px">3j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">DE30/EUR</td><td><span class="dir short" style="font-size:9.5px;padding:1px 6px">Neutral</span></td><td class="reject-code">LOW_QUALITY</td><td style="font-size:10px">Quality B</td><td style="font-family:var(--mono);font-size:10px">45.07</td><td style="font-family:var(--mono);font-size:10px">0j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">GBP/JPY</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">PRICE_PAST_TP</td><td style="font-size:10px">Prix 218.47150 ≥ TP1 215.00630 (entry dépassée de +10.46×ATR)</td><td style="font-family:var(--mono);font-size:10px">54.94</td><td style="font-family:var(--mono);font-size:10px">14j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">CAD/JPY</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">PRICE_PAST_TP</td><td style="font-size:10px">Prix 115.84000 ≥ TP1 114.66128 (entry dépassée de +8.27×ATR)</td><td style="font-family:var(--mono);font-size:10px">69.12</td><td style="font-family:var(--mono);font-size:10px">4j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">USD/JPY</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">PRICE_PAST_TP</td><td style="font-size:10px">Prix 162.41450 ≥ TP1 159.86916 (entry dépassée de +12.84×ATR)</td><td style="font-family:var(--mono);font-size:10px">56.37</td><td style="font-family:var(--mono);font-size:10px">46j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">AUD/JPY</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">PRICE_PAST_TP</td><td style="font-size:10px">Prix 113.38550 ≥ TP1 113.01476 (entry dépassée de +3.59×ATR)</td><td style="font-family:var(--mono);font-size:10px">56.18</td><td style="font-family:var(--mono);font-size:10px">3j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">CHF/JPY</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">PRICE_PAST_TP</td><td style="font-size:10px">Prix 201.15450 ≥ TP1 200.13177 (entry dépassée de +4.81×ATR)</td><td style="font-family:var(--mono);font-size:10px">56.77</td><td style="font-family:var(--mono);font-size:10px">0j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    
+    <tr><td style="font-family:var(--mono);font-weight:700">NZD/JPY</td><td><span class="dir long" style="font-size:9.5px;padding:1px 6px">Bullish</span></td><td class="reject-code">CLUSTER_DUP</td><td style="font-size:10px">Représentant cluster JPY_weak = EUR/JPY</td><td style="font-family:var(--mono);font-size:10px">66.26</td><td style="font-family:var(--mono);font-size:10px">6j</td><td><span class="cal-ok" style="font-size:9.5px;padding:1px 6px">OK</span></td></tr>
+    
+    </tbody>
+  </table>
+  
+  
+  </div>
+</div>
+
+</div>
+<div class="footer">CONFIDENTIEL · BLUESTAR SYSTEM v10 HYBRID V4 · 2026-07-17 22:40 GMT+1 · MAX 5 SETUPS · RR ∈ [1.5, 20.0] · Score absolu note, quantile départage</div>
+</div>
+</body></html>
